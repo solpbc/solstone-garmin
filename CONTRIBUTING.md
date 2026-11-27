@@ -14,7 +14,7 @@ make ci
 
 Requires Garmin Connect IQ SDK 9.3.0+ with device profiles for the targets in
 `manifest.xml`. `make ci` runs `format-check` (SPDX headers, whitespace, and
-strict 3-permission manifest allowlist), strict zero-warning release builds
+strict 4-permission manifest allowlist), strict zero-warning release builds
 across all 23 watches in `manifest.xml`, and the multi-watch simulator unit
 test suite.
 
@@ -23,7 +23,8 @@ test suite.
 - Keep changes scoped to one concern and use small, focused commits.
 - Include simulator unit tests or hardware validation notes for behavior changes.
 - Do **not** add analytics, tracking, crash-reporting SDKs, or manifest
-  permissions outside `AudioInput`, `Background`, and `Communications`.
+  permissions outside `AudioInput`, `Background`, `Communications`, and
+  `ComplicationPublisher`.
 - Never commit Connect IQ developer signing keys (`.der`, `.pem`, `.key`) or
   any real audio, logs, or personal data.
 - Call out wire-protocol (`SLV3`), storage-ring, background-service, or

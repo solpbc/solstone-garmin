@@ -43,8 +43,8 @@ done < <({
   find . -maxdepth 1 -type f \( -name 'manifest.xml' -o -name 'monkey.jungle' -o -name 'Makefile' -o -name '*.md' \)
 })
 
-# 3. Verify manifest declares strictly the 3 allowed permissions (AudioInput, Background, Communications)
-allowed_perms="AudioInput Background Communications"
+# 3. Verify manifest declares strictly the 4 allowed permissions (AudioInput, Background, Communications, ComplicationPublisher)
+allowed_perms="AudioInput Background Communications ComplicationPublisher"
 found_perms=$(grep -oE '<iq:uses-permission[[:space:]]+id="[^"]+"' manifest.xml | sed -E 's/.*id="([^"]+)".*/\1/' | sort -u)
 if [[ -z "$found_perms" ]]; then
   echo "no permissions parsed from manifest.xml" >&2

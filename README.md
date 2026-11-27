@@ -39,8 +39,9 @@ your phone, and design passes are in progress.
   a device you own.
 - The watch holds no journal credentials and makes no direct connection to any
   sol pbc server or to the internet.
-- The app declares only the three Connect IQ permissions it uses:
-  `AudioInput`, `Background`, and `Communications`. It declares no location,
+- The app declares only the four Connect IQ permissions it uses:
+  `AudioInput`, `Background`, `Communications`, and `ComplicationPublisher`
+  (so a watch face can show its state). It declares no location,
   sensor, or fitness-activity permissions, creates no Garmin FIT activities,
   and includes no analytics, tracking, or crash-reporting SDKs.
 
@@ -60,7 +61,7 @@ The 23 Connect IQ 6.0.3+ watches with a built-in microphone declared in
 ## Layout
 
 ```text
-manifest.xml            app identity, 23 microphone watches, 3 permissions
+manifest.xml            app identity, 23 microphone watches, 4 permissions
 monkey.jungle           Connect IQ build configuration
 source/
   VoiceApp.mc           minimal AppBase shell (keeps 64 KB background VM lean)

@@ -1,3 +1,62 @@
 <strings>
-    <string id="AppName">solstone</string>
+    <string id="AppName" scope="glance">solstone</string>
+
+    <string id="Start">start</string>
+    <string id="Stop">stop</string>
+    <string id="PressAgainToStop">press again to stop</string>
+    <string id="Details">details</string>
+    <string id="OpenOnPhone">open on your phone</string>
+    <string id="Ready">ready</string>
+    <string id="Running">running</string>
+
+    <string id="PillTimeout">open from apps and activities</string>
+    <string id="PillMicPermission" scope="glance">microphone access needed</string>
+    <string id="PillMicStalled">audio needs attention</string>
+    <string id="PillStorageFull" scope="glance">watch storage is full</string>
+    <string id="PillEnded" scope="glance">session ended unexpectedly</string>
+    <string id="PillPhoneTooOld">update solstone on your phone</string>
+    <string id="PillWatchTooOld">update solstone on your watch</string>
+    <string id="PillMicStopped" scope="glance">microphone stopped</string>
+    <string id="PillNoPhone">set up solstone on your phone</string>
+
+    <string id="TimeoutPanel">opened from a glance or a watch face, solstone closes after about 2 minutes.</string>
+    <string id="StepTimeout">opened from a glance or a watch face, solstone closes after about 2 minutes. for a session, open it from apps and activities.</string>
+    <string id="StepMicPermission">solstone can't reach the microphone. reinstall it from the Connect IQ Store and allow its permissions.</string>
+    <string id="StepMicStalled">stop and start again. if it happens again, restart your watch.</string>
+    <string id="StepStorageFull">keep your phone nearby with solstone on it so saved audio can move, then start again.</string>
+    <string id="StepMicStopped">start again. if the microphone stops a second time, restart your watch.</string>
+    <string id="StepEnded">the app closed or your watch restarted. the last few minutes may be incomplete.</string>
+    <string id="StepPhoneTooOld">update solstone on your phone so what's saved can move.</string>
+    <string id="StepWatchTooOld">update solstone on your watch so what's saved can move.</string>
+    <string id="StepNoPhone">solstone on your phone takes in what your watch saves for your journal. install or open it there.</string>
+    <string id="StepNoPhoneLink">solstone on your phone takes in what your watch saves for your journal.</string>
+    <string id="StepQuietPhone">what's saved stays here until your phone takes it. keep your phone nearby.</string>
+
+    <string id="HeldOnWatch">held on your watch</string>
+    <string id="PhoneCheckedIn">phone checked in</string>
+    <string id="CouldntCheck">couldn't check</string>
+    <string id="NotYet">not yet</string>
+    <string id="JustNow">just now</string>
+    <string id="MinutesAgo">$1$ min ago</string>
+    <string id="HoursAgo">$1$ h ago</string>
+    <string id="MinutesHeld">$1$ min</string>
+    <string id="UnderAMinute">under a minute</string>
+    <string id="HoldsAbout">away from your phone, your watch holds about $1$ minutes.</string>
+    <string id="HopLine">audio goes through Garmin Connect on your phone.</string>
+
+    <string id="SecondsShort">$1$s</string>
+    <string id="MinutesShort">$1$m</string>
+    <string id="HoursMinutesShort">$1$h $2$m</string>
+
+    <string id="GlanceRunning" scope="glance">running</string>
+    <string id="GlanceReady" scope="glance">ready</string>
+    <string id="GlanceHeld" scope="glance">$1$ min on your watch</string>
+    <string id="GlanceUnknown" scope="glance">open solstone</string>
+
+    <string id="ComplicationLong">solstone</string>
+    <string id="ComplicationShort">solstone</string>
+    <string id="ComplicationOn" scope="background">on</string>
+    <string id="ComplicationOff" scope="background">off</string>
+    <string id="ComplicationAttention" scope="background">!</string>
+    <string id="ComplicationUnknown" scope="background">?</string>
 </strings>
