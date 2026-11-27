@@ -125,6 +125,9 @@ class VoiceController {
         if (_capture.isStarting()) {
             return VoiceProto.PHASE_STARTING;
         }
+        if (_capture.isRecording()) {
+            return _capture.sessionHasAudio() ? VoiceProto.PHASE_ACTIVE : VoiceProto.PHASE_STARTING;
+        }
         return VoiceProto.PHASE_READY;
     }
 
@@ -336,6 +339,14 @@ class VoiceController {
         _stopping = true;
         syncFaceState();
         _capture.stopSession(reason);
+        if (!_capture.isRecording()) {
+            finalizeStoppedSession(reason);
+        } else {
+            requestUiRefresh();
+        }
+    }
+
+    private function finalizeStoppedSession(reason as Number) as Void {
         _stopping = false;
         _sessionStartEpoch = 0;
         _backArmMs = 0;
@@ -480,9 +491,12 @@ class VoiceController {
                     _phoneEverAcked = 1;
                     sessionDirty = true;
                 }
-                var nowEp = Time.now().value();
-                if (nowEp > _lastPhoneAckEpoch) {
-                    _lastPhoneAckEpoch = nowEp;
+            }
+            var rawT = d["t"];
+            if (rawT instanceof Number) {
+                var ackEp = rawT as Number;
+                if (ackEp > _lastPhoneAckEpoch) {
+                    _lastPhoneAckEpoch = ackEp;
                     sessionDirty = true;
                 }
             }
@@ -525,15 +539,11 @@ class VoiceController {
         var segSealed = _capture.tick(_ring);
 
         if (wasRecording && !_capture.isRecording()) {
-            _sessionStartEpoch = 0;
-            setTouchEnabled(true);
             var endR = _capture.stopEndReason();
             if (endR == VoiceProto.END_NONE) {
                 endR = _ring.isFull() ? VoiceProto.END_STORAGE_FULL : VoiceProto.END_USER_STOP;
             }
-            recordEndReason(endR);
-            _ring.persistFgMeta(0, _capture.segId(), _capture.segEpoch());
-            persistHealthAndQueueStatus();
+            finalizeStoppedSession(endR);
         }
         syncFaceState();
 

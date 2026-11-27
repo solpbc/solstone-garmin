@@ -423,6 +423,15 @@ function testFaceKeyTzPointAndSnapshot(logger as Test.Logger) as Boolean {
     Test.assert(snap.tzLat100 == 3974);
     Test.assert(snap.tzLon100 == -10498);
 
+    // Background wake without new ACK timestamp ("t") must NOT fabricate a newer lastPhoneEpoch
+    ctrl.onBackgroundData({ "a" => 5, "s" => 0, "m" => 0, "w" => 2 });
+    Test.assert(ctrl.lastPhoneEpoch() == 1795800200);
+    // Background doorbell ACK with real "t" and "z" updates both
+    ctrl.onBackgroundData({ "a" => 6, "t" => 1795800999, "z" => [3565, 13974] });
+    Test.assert(ctrl.lastPhoneEpoch() == 1795800999);
+    Test.assert(ctrl.tzLat100() == 3565);
+    Test.assert(ctrl.tzLon100() == 13974);
+
     // Timeout launch sets REASON_TIMEOUT_LAUNCH and refuses start()
     var blocked = new VoiceController(VoiceProto.LAUNCH_FROM_GLANCE);
     blocked.testStopTimer();

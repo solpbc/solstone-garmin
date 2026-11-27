@@ -86,6 +86,7 @@ class VoiceCaptureEngine {
     private var _segEpoch as Number = 0;
     private var _tzOffsetMin as Number = 0;
     private var _segStartMs as Number = 0;
+    private var _sessionHasFirstChunk as Boolean = false;
     private var _segHasFirstChunk as Boolean = false;
     private var _lastChunkMs as Number = 0;
     private var _stateMs as Number = 0;
@@ -103,11 +104,12 @@ class VoiceCaptureEngine {
 
     public function getState() as CapState { return _state; }
     public function isRecording() as Boolean { return _state != CAP_IDLE; }
+    public function sessionHasAudio() as Boolean { return _sessionHasFirstChunk; }
     public function hasLiveAudio() as Boolean {
-        return (_state == CAP_RUNNING) && _segHasFirstChunk && !_stalled && !_interrupted;
+        return (_state != CAP_IDLE) && !_wantStopAll && _sessionHasFirstChunk && !_stalled && !_interrupted;
     }
     public function isStarting() as Boolean {
-        return (_state == CAP_RUNNING) && !_segHasFirstChunk && !_stalled && !_interrupted;
+        return (_state != CAP_IDLE) && !_wantStopAll && !_sessionHasFirstChunk && !_stalled && !_interrupted;
     }
     public function isInterrupted() as Boolean { return _interrupted; }
     public function isStalled() as Boolean { return _stalled; }
@@ -131,6 +133,7 @@ class VoiceCaptureEngine {
     public function startSession(startSegId as Number) as Boolean {
         _segId = startSegId;
         _wantStopAll = false;
+        _sessionHasFirstChunk = false;
         _stalled = false;
         _interrupted = false;
         _stopEndReason = VoiceProto.END_NONE;
@@ -235,7 +238,7 @@ class VoiceCaptureEngine {
         _tzOffsetMin = captureLocalTzOffsetMin();
         _segStartMs = System.getTimer();
         _lastChunkMs = _segStartMs;
-        _stalled = false;
+        // Preserve _stalled across recovery restarts until a real non-empty audio chunk arrives.
         try {
             Capture.start();
             _state = CAP_RUNNING;
@@ -289,6 +292,7 @@ class VoiceCaptureEngine {
             _interrupted = false;
             var isFirst = !_segHasFirstChunk;
             _segHasFirstChunk = true;
+            _sessionHasFirstChunk = true;
             var relMs = now - _segStartMs;
             if (!ring.appendChunk(chunk, _rateKhz, _segId, _segEpoch, _tzOffsetMin, relMs, isFirst)) {
                 stopSession(VoiceProto.END_STORAGE_FULL);
@@ -342,6 +346,7 @@ class VoiceCaptureEngine {
                     if (c.size() > 0) {
                         var isF = !_segHasFirstChunk;
                         _segHasFirstChunk = true;
+                        _sessionHasFirstChunk = true;
                         ring.appendChunk(c, _rateKhz, _segId, _segEpoch, _tzOffsetMin, now - _segStartMs, isF);
                     }
                 }
@@ -396,6 +401,7 @@ class VoiceCaptureEngine {
         _tzOffsetMin = tzOffsetMin;
         _segStartMs = System.getTimer();
         _lastChunkMs = _segStartMs;
+        _sessionHasFirstChunk = false;
         _segHasFirstChunk = false;
         _stalled = false;
         _interrupted = false;

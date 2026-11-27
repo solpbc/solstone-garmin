@@ -67,25 +67,30 @@ class VoiceBgService extends System.ServiceDelegate {
     private var _syncCompleted as Boolean = false;
     private var _endingSlice as Boolean = false;
     private var _exited as Boolean = false;
+    private var _ackEpoch as Number = 0;
+    private var _ackTz as Array<Number>?;
 
     public function initialize() {
         ServiceDelegate.initialize();
     }
 
     public function onTemporalEvent() as Void {
-        beginWake(false, -1);
+        beginWake(false, -1, null);
     }
 
     public function onPhoneAppMessage(msg as Communications.PhoneAppMessage) as Void {
         var parsedAck = (msg != null) ? VoiceProto.parseAckSeq(msg.data) : -1;
-        beginWake(true, parsedAck);
+        var parsedTz = (msg != null) ? VoiceProto.parseAckTzPoint(msg.data) : null;
+        beginWake(true, parsedAck, parsedTz);
     }
 
-    private function beginWake(fromDoorbell as Boolean, parsedAck as Number) as Void {
+    private function beginWake(fromDoorbell as Boolean, parsedAck as Number, parsedTz as Array<Number>?) as Void {
         _wakeStartMs = System.getTimer();
         _wakeEpoch = Time.now().value();
         _exited = false;
         _sentThisWake = 0;
+        _ackEpoch = (fromDoorbell && parsedAck >= 0) ? _wakeEpoch : 0;
+        _ackTz = parsedTz;
 
         var fg = VoiceProto.readIntArray(VoiceProto.K_FG_META, 7);
         if (fg == null) {
@@ -134,7 +139,7 @@ class VoiceBgService extends System.ServiceDelegate {
             try {
                 Background.deleteTemporalEvent();
             } catch (_) {}
-            if (ackChanged) {
+            if (ackChanged || _ackEpoch > 0 || _ackTz != null) {
                 persistBgMeta(0);
                 finishWake(0, 0);
             } else {
@@ -263,7 +268,13 @@ class VoiceBgService extends System.ServiceDelegate {
             "s" => _sentThisWake,
             "m" => more,
             "w" => _wakeCount
-        };
+        } as Dictionary<Application.PropertyKeyType, Application.PropertyValueType>;
+        if (_ackEpoch > 0) {
+            payload["t"] = _ackEpoch;
+        }
+        if (_ackTz != null) {
+            payload["z"] = _ackTz as Array<Application.PropertyValueType>;
+        }
         Background.exit(payload);
     }
 }
