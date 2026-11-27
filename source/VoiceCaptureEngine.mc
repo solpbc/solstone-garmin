@@ -7,7 +7,7 @@ import Toybox.Lang;
 import Toybox.System;
 import Toybox.Time;
 
-// Tiny 3-method ISR-minimal Capture.Callbacks object — ZERO back-reference to app/runner,
+// Tiny 3-method ISR-minimal Capture.Callbacks object — ZERO back-reference to app/controller,
 // ZERO Storage I/O, ZERO BLE calls, ZERO Capture.* calls, ZERO allocations.
 class VoiceCaptureCallbacks {
     private const CAP as Number = 32; // Power-of-2 ring (~16s of 500ms Opus chunks in RAM)
@@ -69,12 +69,13 @@ class VoiceCaptureEngine {
         CAP_RUNNING,
         CAP_STOPPING,
         CAP_SETTLING,
-        CAP_QUIET_WAIT
+        CAP_INTERRUPTED
     }
 
-    private const STALL_TIMEOUT_MS as Number = 45000; // >20s so flash GC pauses never false-alarm stall state
+    private const STALL_TIMEOUT_MS as Number = 45000; // < 60s attention bound, > 20s flash pause margin
     private const SETTLE_MS as Number = 300;
     private const STOP_TIMEOUT_MS as Number = 3000;
+    private const INTERRUPT_RETRY_MS as Number = 2000;
 
     private var _cb as VoiceCaptureCallbacks;
     private var _state as CapState = CAP_IDLE;
@@ -83,14 +84,18 @@ class VoiceCaptureEngine {
 
     private var _segId as Number = 0;
     private var _segEpoch as Number = 0;
+    private var _tzOffsetMin as Number = 0;
     private var _segStartMs as Number = 0;
     private var _segHasFirstChunk as Boolean = false;
     private var _lastChunkMs as Number = 0;
     private var _stateMs as Number = 0;
     private var _stalled as Boolean = false;
+    private var _interrupted as Boolean = false;
     private var _segRecoveryDone as Boolean = false;
     private var _segsCompleted as Number = 0;
     private var _wantStopAll as Boolean = false;
+    private var _stopEndReason as Number = VoiceProto.END_NONE;
+    private var _lastFailureErr as Number = -1;
 
     public function initialize() {
         _cb = new VoiceCaptureCallbacks();
@@ -98,23 +103,47 @@ class VoiceCaptureEngine {
 
     public function getState() as CapState { return _state; }
     public function isRecording() as Boolean { return _state != CAP_IDLE; }
+    public function hasLiveAudio() as Boolean {
+        return (_state == CAP_RUNNING) && _segHasFirstChunk && !_stalled && !_interrupted;
+    }
+    public function isStarting() as Boolean {
+        return (_state == CAP_RUNNING) && !_segHasFirstChunk && !_stalled && !_interrupted;
+    }
+    public function isInterrupted() as Boolean { return _interrupted; }
     public function isStalled() as Boolean { return _stalled; }
     public function segId() as Number { return _segId; }
     public function segEpoch() as Number { return _segEpoch; }
+    public function tzOffsetMin() as Number { return _tzOffsetMin; }
     public function segsCompleted() as Number { return _segsCompleted; }
     public function droppedChunks() as Number { return _cb.dropped; }
-    public function lastError() as Number { return _cb.lastErr; }
+    public function lastError() as Number { return _lastFailureErr; }
+    public function stopEndReason() as Number { return _stopEndReason; }
     public function rateKhz() as Number { return _rateKhz; }
+
+    public function segElapsedMs() as Number {
+        if (_segStartMs == 0) {
+            return 0;
+        }
+        var dt = System.getTimer() - _segStartMs;
+        return (dt > 0) ? dt : 0;
+    }
 
     public function startSession(startSegId as Number) as Boolean {
         _segId = startSegId;
         _wantStopAll = false;
         _stalled = false;
+        _interrupted = false;
+        _stopEndReason = VoiceProto.END_NONE;
+        _lastFailureErr = -1;
         return beginSegment();
     }
 
-    public function stopSession() as Void {
+    public function stopSession(reason as Number) as Void {
         _wantStopAll = true;
+        _interrupted = false;
+        if (_stopEndReason == VoiceProto.END_NONE) {
+            _stopEndReason = reason;
+        }
         if (_state == CAP_RUNNING) {
             requestStopCapture();
         } else if (_state != CAP_STOPPING) {
@@ -124,6 +153,7 @@ class VoiceCaptureEngine {
 
     public function forceStopImmediate() as Void {
         _wantStopAll = true;
+        _interrupted = false;
         try {
             if (Capture.getState() == Capture.CAPTURE_CAPTURING) {
                 Capture.stop();
@@ -132,12 +162,28 @@ class VoiceCaptureEngine {
         _state = CAP_IDLE;
     }
 
-    // Resume next segment after Mode C quiet-window drain completes
-    public function resumeAfterQuietDrain() as Void {
-        if (_state == CAP_QUIET_WAIT && !_wantStopAll) {
-            _segId++;
-            beginSegment();
+    // Temporary OS overlay interruption (notification, alarm, call): keep active intent and recover on return
+    public function onAppInactive() as Void {
+        if (_state == CAP_RUNNING) {
+            _interrupted = true;
         }
+    }
+
+    public function onAppActive() as Void {
+        if (_state == CAP_INTERRUPTED && !_wantStopAll) {
+            _segId++;
+            if (beginSegment()) {
+                _interrupted = false;
+            }
+        }
+    }
+
+    private function captureLocalTzOffsetMin() as Number {
+        try {
+            var clk = System.getClockTime();
+            return clk.timeZoneOffset / 60;
+        } catch (_) {}
+        return 0;
     }
 
     private function ensureInitialized() as Boolean {
@@ -172,13 +218,13 @@ class VoiceCaptureEngine {
         } catch (ex) {
             VoiceProto.vlog("SV initAudio err=" + ex.getErrorMessage());
             _initialized = false;
+            _stopEndReason = VoiceProto.END_MIC_DENIED;
             return false;
         }
     }
 
     private function beginSegment() as Boolean {
         if (!ensureInitialized()) {
-            _stalled = true;
             _state = CAP_IDLE;
             return false;
         }
@@ -186,6 +232,7 @@ class VoiceCaptureEngine {
         _segHasFirstChunk = false;
         _segRecoveryDone = false;
         _segEpoch = Time.now().value();
+        _tzOffsetMin = captureLocalTzOffsetMin();
         _segStartMs = System.getTimer();
         _lastChunkMs = _segStartMs;
         _stalled = false;
@@ -193,12 +240,12 @@ class VoiceCaptureEngine {
             Capture.start();
             _state = CAP_RUNNING;
             _stateMs = _segStartMs;
-            VoiceProto.vlog("SV seg start id=" + _segId);
+            VoiceProto.vlog("SV seg start id=" + _segId + " tzMin=" + _tzOffsetMin);
             return true;
         } catch (ex) {
             VoiceProto.vlog("SV Capture.start err=" + ex.getErrorMessage());
-            _initialized = false; // Force clean re-init only on start failure
-            _stalled = true;
+            _initialized = false;
+            _stopEndReason = VoiceProto.END_MIC_DENIED;
             _state = CAP_IDLE;
             return false;
         }
@@ -218,13 +265,14 @@ class VoiceCaptureEngine {
         }
     }
 
-    // Master 250ms tick: drains ISR ring into Storage, enforces 5m segment rotation and 45s stall watchdog.
-    // Returns true when a 5m segment just sealed cleanly.
-    public function tick(ring as VoiceStorageRing, modeId as Number) as Boolean {
+    // Master 250ms tick: drains ISR ring into Storage, enforces 5m segment rotation,
+    // distinguishes temporary OS interruptions from real capture failures, and runs the 45s stall watchdog.
+    // Returns true when a segment just sealed cleanly.
+    public function tick(ring as VoiceStorageRing) as Boolean {
         var now = System.getTimer();
         var segJustSealed = false;
 
-        // 1. Drain any buffered chunks from ISR-minimal ring into Storage (bounded to <=8 chunks/tick for watchdog safety)
+        // 1. Drain any buffered chunks from ISR-minimal ring into Storage (bounded to <=8 chunks/tick)
         var drained = 0;
         while (drained < 8) {
             var chunk = _cb.pop();
@@ -232,85 +280,133 @@ class VoiceCaptureEngine {
                 break;
             }
             drained++;
-            // CIQQA-4919 guard: empty 0-byte chunks MUST NOT reset the stall watchdog
+            // Empty 0-byte chunks must never mark live audio or reset the stall watchdog
             if (chunk.size() == 0) {
                 continue;
             }
             _lastChunkMs = now;
             _stalled = false;
+            _interrupted = false;
             var isFirst = !_segHasFirstChunk;
             _segHasFirstChunk = true;
             var relMs = now - _segStartMs;
-            if (!ring.appendChunk(chunk, modeId, _rateKhz, _segId, _segEpoch, relMs, isFirst)) {
-                // Storage full — stop capture cleanly without overwriting undelivered audio
-                stopSession();
+            if (!ring.appendChunk(chunk, _rateKhz, _segId, _segEpoch, _tzOffsetMin, relMs, isFirst)) {
+                stopSession(VoiceProto.END_STORAGE_FULL);
                 break;
             }
         }
 
-        // 2. State machine transitions (NEVER called inside Capture.Callbacks)
+        // 2. State machine transitions (never called inside Capture.Callbacks)
         if (_state == CAP_RUNNING) {
             if (_cb.errFlag) {
-                VoiceProto.vlog("SV cap err=" + _cb.lastErr);
+                var err = _cb.lastErr;
+                _lastFailureErr = err;
+                _cb.errFlag = false;
+                VoiceProto.vlog("SV cap err=" + err);
+                if (err == (Capture.CAPTURE_ERR_BACKGROUNDED as Number)) {
+                    // Temporary OS interruption: seal partial prefix, keep session active & interrupted, retry when active
+                    ring.flushSegmentTail(_rateKhz, _segId, _segEpoch, _tzOffsetMin, segElapsedMs(), true);
+                    _interrupted = true;
+                    _state = CAP_INTERRUPTED;
+                    _stateMs = now;
+                    return false;
+                }
+                // Fatal capture failure: end session cleanly without auto-retry
+                _wantStopAll = true;
+                _stopEndReason = VoiceProto.END_MIC_ERROR;
                 requestStopCapture();
                 return false;
             }
             if ((now - _lastChunkMs) >= STALL_TIMEOUT_MS) {
                 _stalled = true;
-                // Attempt at most 1 clean stop->settle->start recovery per segment before latching MIC STALLED
                 if (!_segRecoveryDone) {
                     _segRecoveryDone = true;
                     VoiceProto.vlog("SV stall recovery seg=" + _segId);
                     requestStopCapture();
-                    return false;
                 }
+                return false;
             }
             if ((now - _segStartMs) >= VoiceProto.SEG_DURATION_MS) {
                 requestStopCapture();
+                return false;
             }
-            return false;
-        }
-
-        if (_state == CAP_STOPPING) {
-            var capDone = _cb.completeFlag || (Capture.getState() != Capture.CAPTURE_CAPTURING) || ((now - _stateMs) >= STOP_TIMEOUT_MS);
-            if (capDone) {
-                // Drain any final EOS audio chunks flushed by Capture.stop()
-                while (true) {
-                    var tail = _cb.pop();
-                    if (tail == null) { break; }
-                    var isFirst2 = !_segHasFirstChunk;
-                    _segHasFirstChunk = true;
-                    ring.appendChunk(tail, modeId, _rateKhz, _segId, _segEpoch, now - _segStartMs, isFirst2);
+        } else if (_state == CAP_STOPPING) {
+            if (_cb.completeFlag || _cb.errFlag || ((now - _stateMs) >= STOP_TIMEOUT_MS)) {
+                var drainedFinal = 0;
+                while (drainedFinal < 16) {
+                    var c = _cb.pop();
+                    if (c == null) {
+                        break;
+                    }
+                    drainedFinal++;
+                    if (c.size() > 0) {
+                        var isF = !_segHasFirstChunk;
+                        _segHasFirstChunk = true;
+                        ring.appendChunk(c, _rateKhz, _segId, _segEpoch, _tzOffsetMin, now - _segStartMs, isF);
+                    }
                 }
-                ring.flushSegmentTail(modeId, _rateKhz, _segId, _segEpoch, now - _segStartMs);
+                var relEnd = now - _segStartMs;
+                var isPartial = _wantStopAll || _stalled || (relEnd < (VoiceProto.SEG_DURATION_MS - 5000));
+                ring.flushSegmentTail(_rateKhz, _segId, _segEpoch, _tzOffsetMin, relEnd, isPartial);
                 _segsCompleted++;
                 segJustSealed = true;
 
-                if (_wantStopAll || ring.isFull()) {
+                if (_wantStopAll) {
                     _state = CAP_IDLE;
-                } else if (modeId == VoiceProto.MODE_QUIET_BURST) {
-                    _state = CAP_QUIET_WAIT;
-                    _stateMs = now;
                 } else {
                     _state = CAP_SETTLING;
                     _stateMs = now;
                 }
             }
-            return segJustSealed;
-        }
-
-        if (_state == CAP_SETTLING) {
+        } else if (_state == CAP_SETTLING) {
             if ((now - _stateMs) >= SETTLE_MS) {
-                if (_wantStopAll || ring.isFull()) {
+                if (_wantStopAll) {
                     _state = CAP_IDLE;
                 } else {
                     _segId++;
                     beginSegment();
                 }
             }
-            return false;
+        } else if (_state == CAP_INTERRUPTED) {
+            if (_wantStopAll) {
+                _state = CAP_IDLE;
+                _interrupted = false;
+            } else if ((now - _stateMs) >= INTERRUPT_RETRY_MS) {
+                _stateMs = now;
+                _segId++;
+                if (beginSegment()) {
+                    _interrupted = false;
+                } else {
+                    // Still backgrounded or blocked; keep interrupted until foreground returns or owner stops
+                    _state = CAP_INTERRUPTED;
+                    _interrupted = true;
+                    _stopEndReason = VoiceProto.END_NONE;
+                }
+            }
         }
 
-        return false;
+        return segJustSealed;
+    }
+
+    // Deterministic unit-test entry points (stripped from release builds via (:debug))
+    (:debug)
+    public function testEnterRunning(segId as Number, tzOffsetMin as Number) as Void {
+        _segId = segId;
+        _segEpoch = Time.now().value();
+        _tzOffsetMin = tzOffsetMin;
+        _segStartMs = System.getTimer();
+        _lastChunkMs = _segStartMs;
+        _segHasFirstChunk = false;
+        _stalled = false;
+        _interrupted = false;
+        _wantStopAll = false;
+        _stopEndReason = VoiceProto.END_NONE;
+        _state = CAP_RUNNING;
+        _cb.resetFlags();
+    }
+
+    (:debug)
+    public function testCallbacks() as VoiceCaptureCallbacks {
+        return _cb;
     }
 }

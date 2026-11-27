@@ -18,13 +18,18 @@ class VoiceStorageRing {
     private var _headSeq as Number = 0;        // Next monotonic slab seq to write (FG sole writer)
     private var _fgAckedSeq as Number = -1;    // Highest phone-ACKed seq confirmed in FG (persisted in K_FG_META[1])
     private var _ackedSeq as Number = -1;      // Effective confirmed ACK = max(_fgAckedSeq, bgAckedSeq)
-    private var _bgLastWakeEpoch as Number = 0;// Last BG wake UTC epoch (guards Mode B clearValues race)
+    private var _bgLastWakeEpoch as Number = 0;
     private var _bgWakeCount as Number = 0;
     private var _slabsSinceReset as Number = 0;
     private var _storageFull as Boolean = false;
     private var _writeMaxMs as Number = 0;
     private var _writeCount as Number = 0;
     private var _resetCount as Number = 0;
+    private var _faceInit as Boolean = false;
+    private var _facePhase as Number = -1;
+    private var _faceReason as Number = -1;
+    private var _faceLastEnd as Number = -1;
+    private var _faceStartEpoch as Number = -1;
 
     public function initialize() {
         _encOpts = { :offset => 0, :endianness => Lang.ENDIAN_BIG };
@@ -40,6 +45,9 @@ class VoiceStorageRing {
             _ackedSeq = _fgAckedSeq;
         }
         syncBgAck();
+        if (pendingCount() >= VoiceProto.RING_CAP) {
+            _storageFull = true;
+        }
     }
 
     public function syncBgAck() as Void {
@@ -81,12 +89,12 @@ class VoiceStorageRing {
     public function writeCount() as Number { return _writeCount; }
     public function resetCount() as Number { return _resetCount; }
 
-    public function persistFgMeta(fgActive as Number, modeId as Number, segId as Number, segEpoch as Number) as Void {
+    public function persistFgMeta(fgActive as Number, segId as Number, segEpoch as Number) as Void {
         var meta = [
             _headSeq,
             _fgAckedSeq,
             fgActive,
-            modeId,
+            VoiceProto.MODE_FG_BURST,
             segId,
             segEpoch,
             Time.now().value()
@@ -94,13 +102,27 @@ class VoiceStorageRing {
         VoiceProto.writeIntArray(VoiceProto.K_FG_META, meta);
     }
 
+    // Write tiny FG-only glance/complication key K_FACE (-4) ONLY when one of the 4 fields transitions
+    public function writeFaceState(phase as Number, reason as Number, lastEnd as Number, startEpoch as Number) as Boolean {
+        if (_faceInit && phase == _facePhase && reason == _faceReason && lastEnd == _faceLastEnd && startEpoch == _faceStartEpoch) {
+            return false;
+        }
+        _faceInit = true;
+        _facePhase = phase;
+        _faceReason = reason;
+        _faceLastEnd = lastEnd;
+        _faceStartEpoch = startEpoch;
+        var face = [phase, reason, lastEnd, startEpoch] as Array<Number>;
+        return VoiceProto.writeIntArray(VoiceProto.K_FACE, face);
+    }
+
     // Stage an audio chunk outside onData() (called strictly from the 250ms master Timer)
     public function appendChunk(
         chunk as ByteArray,
-        modeId as Number,
         rateKhz as Number,
         segId as Number,
         segEpoch as Number,
+        tzOffsetMin as Number,
         relMs as Number,
         isSegStart as Boolean
     ) as Boolean {
@@ -117,17 +139,18 @@ class VoiceStorageRing {
         _chunkBytes += chunk.size();
 
         if (_chunkBytes >= VoiceProto.SLAB_TARGET_BYTES) {
-            return commitStagedSlab(modeId, rateKhz, segId, segEpoch, 0);
+            return commitStagedSlab(rateKhz, segId, segEpoch, tzOffsetMin, 0);
         }
         return true;
     }
 
     public function flushSegmentTail(
-        modeId as Number,
         rateKhz as Number,
         segId as Number,
         segEpoch as Number,
-        relMs as Number
+        tzOffsetMin as Number,
+        relMs as Number,
+        isPartial as Boolean
     ) as Boolean {
         if (_chunks.size() == 0) {
             return true;
@@ -135,14 +158,18 @@ class VoiceStorageRing {
         if (_stageRelMs == 0) {
             _stageRelMs = relMs;
         }
-        return commitStagedSlab(modeId, rateKhz, segId, segEpoch, VoiceProto.FLAG_SEG_END);
+        var extraFlags = VoiceProto.FLAG_SEG_END;
+        if (isPartial) {
+            extraFlags = extraFlags | VoiceProto.FLAG_SEG_PARTIAL;
+        }
+        return commitStagedSlab(rateKhz, segId, segEpoch, tzOffsetMin, extraFlags);
     }
 
     private function commitStagedSlab(
-        modeId as Number,
         rateKhz as Number,
         segId as Number,
         segEpoch as Number,
+        tzOffsetMin as Number,
         extraFlags as Number
     ) as Boolean {
         // Honest full-storage check: never overwrite undelivered slabs
@@ -153,8 +180,7 @@ class VoiceStorageRing {
             return false;
         }
 
-        // Zero-copy single-buffer slab assembly: reserve 24B header prefix, append chunks directly,
-        // compute fastTag16 in place, and stamp SLV2 header into bytes 0..23 (halves transient peak RAM!)
+        // Single-buffer slab assembly: reserve 28B SLV3 header, append chunks, compute fastTag16, stamp header
         var slab = new [VoiceProto.HDR_SIZE]b;
         var n = _chunks.size();
         for (var i = 0; i < n; i++) {
@@ -168,22 +194,23 @@ class VoiceStorageRing {
             return true;
         }
 
-        var flags = extraFlags | ((modeId & 0x07) << 5);
+        var flags = extraFlags;
         if (_stageSegStart) {
             flags = flags | VoiceProto.FLAG_SEG_START;
             _stageSegStart = false;
         }
         var tag16 = VoiceProto.fastTag16(slab, VoiceProto.HDR_SIZE, plen);
-        VoiceProto.writeHeaderInPlace(slab, flags, rateKhz, segId, _headSeq, segEpoch, _stageRelMs, plen, tag16, _encOpts);
+        VoiceProto.writeHeaderInPlace(
+            slab, flags, rateKhz, segId, _headSeq, segEpoch, tzOffsetMin, _stageRelMs, plen, tag16, _encOpts
+        );
 
         var slot = _headSeq % VoiceProto.RING_CAP;
         var t0 = System.getTimer();
         try {
             Storage.setValue(slot, slab);
         } catch (ex) {
-            // If ALL prior slabs are already phone-ACKed (pendingCount == 0), reclaim fragmented .DAT and retry once!
             if (pendingCount() == 0) {
-                forceCompactEmpty(1, modeId, segId, segEpoch);
+                forceCompactEmpty(1, segId, segEpoch);
                 try {
                     Storage.setValue(slot, slab);
                 } catch (ex2) {
@@ -205,11 +232,10 @@ class VoiceStorageRing {
         _writeCount++;
         _headSeq++;
         _slabsSinceReset++;
-        persistFgMeta(1, modeId, segId, segEpoch);
+        persistFgMeta(1, segId, segEpoch);
         return true;
     }
 
-    // Read slab seq for FG transmit (returns null if missing/corrupt)
     public function readSlab(seq as Number) as ByteArray? {
         if (seq < 0 || seq >= _headSeq) {
             return null;
@@ -224,43 +250,45 @@ class VoiceStorageRing {
     }
 
     // Compaction-stall defense (OVERWRITE_AND_RESET):
-    // Avoids per-slab deleteValue() tombstones; when ring drains 100% empty after >=120 slabs (~1 MB),
-    // clears .DAT cleanly in ~160ms and rewrites metadata cursors immediately.
-    // In Mode B, also requires >35s since last BG wake so clearValues() can never race a live ServiceDelegate VM.
-    public function maybeCompactIfEmpty(fgActive as Number, modeId as Number, segId as Number, segEpoch as Number) as Void {
+    // When ring drains 100% empty after >=120 slabs (~1 MB), clears Storage cleanly and rewrites metadata cursors.
+    public function maybeCompactIfEmpty(fgActive as Number, segId as Number, segEpoch as Number) as Void {
         if (pendingCount() > 0 || _slabsSinceReset < 120) {
             return;
         }
-        if (modeId == VoiceProto.MODE_BG_DRAIN) {
-            var nowEpoch = Time.now().value();
-            if (_bgLastWakeEpoch > 0 && (nowEpoch - _bgLastWakeEpoch) < 35) {
-                return;
-            }
+        if (_bgLastWakeEpoch > 0 && (Time.now().value() - _bgLastWakeEpoch) < 35) {
+            return;
         }
-        forceCompactEmpty(fgActive, modeId, segId, segEpoch);
+        forceCompactEmpty(fgActive, segId, segEpoch);
     }
 
-    // Reclaim delivered .DAT/.IDX cleanly when pendingCount == 0 (safe on startSession or empty-ring fallback)
-    public function reclaimDeliveredOnIdle(modeId as Number, segId as Number, segEpoch as Number) as Void {
+    public function reclaimDeliveredOnIdle(segId as Number, segEpoch as Number) as Void {
         if (_headSeq > 0 && pendingCount() == 0) {
-            forceCompactEmpty(0, modeId, segId, segEpoch);
+            forceCompactEmpty(0, segId, segEpoch);
             _storageFull = false;
         }
     }
 
-    private function forceCompactEmpty(fgActive as Number, modeId as Number, segId as Number, segEpoch as Number) as Void {
+    private function forceCompactEmpty(fgActive as Number, segId as Number, segEpoch as Number) as Void {
         var bgMeta = VoiceProto.readIntArray(VoiceProto.K_BG_META, 5);
-        var telem = VoiceProto.readIntArray(VoiceProto.K_TELEM, 6);
+        var health = VoiceProto.readIntArray(VoiceProto.K_HEALTH, 6);
+        var face = VoiceProto.readIntArray(VoiceProto.K_FACE, 4);
+        var sessMeta = VoiceProto.readIntArray(VoiceProto.K_SESSION_META, 7);
         try {
             Storage.clearValues();
             _slabsSinceReset = 0;
             _resetCount++;
-            persistFgMeta(fgActive, modeId, segId, segEpoch);
+            persistFgMeta(fgActive, segId, segEpoch);
             if (bgMeta != null) {
                 VoiceProto.writeIntArray(VoiceProto.K_BG_META, bgMeta);
             }
-            if (telem != null) {
-                VoiceProto.writeIntArray(VoiceProto.K_TELEM, telem);
+            if (health != null) {
+                VoiceProto.writeIntArray(VoiceProto.K_HEALTH, health);
+            }
+            if (face != null) {
+                VoiceProto.writeIntArray(VoiceProto.K_FACE, face);
+            }
+            if (sessMeta != null) {
+                VoiceProto.writeIntArray(VoiceProto.K_SESSION_META, sessMeta);
             }
             VoiceProto.vlog("SV compacted empty ring at seq=" + _headSeq + " resets=" + _resetCount);
         } catch (_) {}

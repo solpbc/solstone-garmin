@@ -48,7 +48,7 @@ for dev in $TEST_DEVICES; do
     exit 0
   " 2>&1) || true
   printf '%s\n' "$out" | grep -E 'Executing test|DEBUG|PASS|FAIL|ERROR|PASSED|Ran ' || true
-  if ! printf '%s\n' "$out" | grep -q "PASSED (passed=7, failed=0, errors=0)"; then
+  if ! printf '%s\n' "$out" | grep -q "PASSED (passed=13, failed=0, errors=0)"; then
     echo "error: simulator unit tests failed on ${dev}" >&2
     printf '%s\n' "$out" >&2
     exit 1

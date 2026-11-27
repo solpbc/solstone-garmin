@@ -77,15 +77,13 @@ device-specific launch crashes:
 4. **No concurrent `Storage` key races and no per-slab `deleteValue()`:**
    - Foreground is sole writer of slots `0..959` and `K_FG_META (-1)`;
      background is sole writer of `K_BG_META (-2)`.
-   - In foreground-delivery modes, call `Background.deleteTemporalEvent()`
-     while foreground runs and re-arm on `onStop()` only when unconfirmed slabs
-     remain.
+   - While the foreground app runs, call `Background.deleteTemporalEvent()`
+     and re-arm on `onStop()` only when unconfirmed slabs remain.
    - Never call per-slab `Storage.deleteValue()` during continuous turnover
      (tombstones cause multi-second flash compaction freezes). Compact via
      `Storage.clearValues()` only when `pendingCount() == 0` (periodically
-     after `>= 120` slabs, with a `>= 35 s` post-BG-wake guard in
-     `MODE_BG_DRAIN`, on idle start reclaim, or on write-error recovery),
-     immediately rewriting metadata.
+     after `>= 120` slabs, respecting a `>= 35 s` post-BG-wake guard, on idle
+     start reclaim, or on write-error recovery), immediately rewriting metadata.
 5. **Keep the 64 KB `(:background)` VM tiny and timer-free:** `VoiceApp` must
    allocate zero foreground objects in `initialize()` or `onStart()`; bridge
    foreground creation through `(:typecheck(disableBackgroundCheck))` module
@@ -111,7 +109,7 @@ device-specific launch crashes:
 | `make build` | Strict release build (`-r -O 3pz -l 3 -w`) for `DEVICE` (default `fr970`) |
 | `make build-debug` | Debug build (`-O 2 -l 3 -w`) keeping `(:debug)` logs |
 | `make build-all` | Zero-warning release compile across all 23 watches in `manifest.xml` |
-| `make test` | Run 7-test Run No Evil simulator suite across `fr970`, `fenix8solar47mm`, `venu441mm`, `venux1` |
+| `make test` | Run 13-test Run No Evil simulator suite across `fr970`, `fenix8solar47mm`, `venu441mm`, `venux1` |
 | `make format` | Auto-fix trailing whitespace / line endings and check SPDX headers |
 | `make format-check` | Verify SPDX headers, whitespace, and strict 3-permission manifest allowlist |
 | `make ci` | Full pre-commit gate: `format-check` + `build-all` + `test` |

@@ -26,7 +26,7 @@ test suite.
   permissions outside `AudioInput`, `Background`, and `Communications`.
 - Never commit Connect IQ developer signing keys (`.der`, `.pem`, `.key`) or
   any real audio, logs, or personal data.
-- Call out wire-protocol (`SLV2`), storage-ring, background-service, or
+- Call out wire-protocol (`SLV3`), storage-ring, background-service, or
   manifest device-list changes explicitly.
 
 ## License of contributions

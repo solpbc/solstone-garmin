@@ -40,15 +40,15 @@ class VoiceBgTxListener extends Communications.ConnectionListener {
     }
 }
 
-// Ultra-lean isolated 64 KB Background ServiceDelegate:
-// - ZERO Timer usage (Timer has disableBackground = true in SDK 9.3.0)
+// Isolated 64 KB Background ServiceDelegate:
+// - ZERO Timer usage (Timer has disableBackground = true)
 // - Passive phoneConnected check -> exits in <15ms with zero radio if phone out of range
 // - Callback-chained 22s burst drain (~180 KB per wake, 8 KB slabs) with iterative sync-callback trampoline
-// - Powers Mode B (two-process split) and post-session background delivery for Modes A/C
+// - Delivers waiting slabs oldest-first after the watch app closes (never starts audio capture)
 (:background)
 class VoiceBgService extends System.ServiceDelegate {
     private const SLICE_BUDGET_MS as Number = 22000; // Leave 8s margin under 30s OS hard kill
-    private const MAX_SLABS_PER_WAKE as Number = 24; // ~192 KB max per slice
+    private const MAX_SLABS_PER_WAKE as Number = 24;
 
     private var _wakeStartMs as Number = 0;
     private var _wakeEpoch as Number = 0;
@@ -65,19 +65,17 @@ class VoiceBgService extends System.ServiceDelegate {
     private var _gen as Number = 0;
     private var _inDispatch as Boolean = false;
     private var _syncCompleted as Boolean = false;
+    private var _endingSlice as Boolean = false;
     private var _exited as Boolean = false;
 
     public function initialize() {
         ServiceDelegate.initialize();
     }
 
-    // 5-minute passive range check & burst trigger
     public function onTemporalEvent() as Void {
         beginWake(false, -1);
     }
 
-    // Phone wake doorbell (Mode B chaining and post-session drain).
-    // Tolerates Android Connect IQ quirk where msg.data can arrive null (forum 424474).
     public function onPhoneAppMessage(msg as Communications.PhoneAppMessage) as Void {
         var parsedAck = (msg != null) ? VoiceProto.parseAckSeq(msg.data) : -1;
         beginWake(true, parsedAck);
@@ -97,9 +95,7 @@ class VoiceBgService extends System.ServiceDelegate {
         _headSeq = fg[0];
         _fgAckedSeq = fg[1];
         var fgActive = fg[2];
-        var fgMode = fg[3];
 
-        // Load BG sole-writer state: [bgAckedSeq, lastSentSeq, wakeCount, lastWakeEpoch, lastErr]
         var bg = VoiceProto.readIntArray(VoiceProto.K_BG_META, 5);
         if (bg != null) {
             _bgAckedSeq = bg[0];
@@ -110,15 +106,14 @@ class VoiceBgService extends System.ServiceDelegate {
         }
         _wakeCount++;
 
-        // Apply any explicit phone cumulative ACK carried by doorbell
         var ackChanged = false;
         if (parsedAck > _bgAckedSeq && parsedAck < _headSeq) {
             _bgAckedSeq = parsedAck;
             ackChanged = true;
         }
 
-        // If FG owns the radio (Modes A or C while actively running), exit silently without touching BLE
-        if (fgActive == 1 && fgMode != VoiceProto.MODE_BG_DRAIN) {
+        // Foreground owns the radio while actively running; exit cleanly without touching BLE
+        if (fgActive == 1) {
             if (ackChanged) {
                 persistBgMeta(0);
             }
@@ -128,17 +123,17 @@ class VoiceBgService extends System.ServiceDelegate {
 
         var confirmedAck = (_fgAckedSeq > _bgAckedSeq) ? _fgAckedSeq : _bgAckedSeq;
 
-        // Pick burst start cursor:
-        // - Explicit ACK or temporal wake: start strictly at confirmedAck + 1 (at-least-once safe)
-        // - Null-data doorbell within 30s of prior slice: advance past _lastSentSeq so Android null-payload quirk never loops
         if (fromDoorbell && parsedAck < 0 && _lastSentSeq > confirmedAck && _lastSentSeq < _headSeq && (_wakeEpoch - _prevWakeEpoch) <= 30) {
             _cursor = _lastSentSeq + 1;
         } else {
             _cursor = confirmedAck + 1;
         }
 
-        // Nothing waiting? Exit immediately (<15ms, zero radio)
         if (_cursor >= _headSeq) {
+            // Queue completely drained: stop 5-minute temporal wakes until next session leaves waiting audio
+            try {
+                Background.deleteTemporalEvent();
+            } catch (_) {}
             if (ackChanged) {
                 persistBgMeta(0);
                 finishWake(0, 0);
@@ -148,7 +143,6 @@ class VoiceBgService extends System.ServiceDelegate {
             return;
         }
 
-        // Passive range check — out of range means zero BLE transmit calls, exit in <15ms
         if (!System.getDeviceSettings().phoneConnected) {
             if (ackChanged) {
                 persistBgMeta(0);
@@ -160,15 +154,14 @@ class VoiceBgService extends System.ServiceDelegate {
         var stats = System.getSystemStats();
         VoiceProto.vlog("SV BG wake=" + _wakeCount + " door=" + fromDoorbell + " cur=" + _cursor + "/" + _headSeq + " free=" + stats.freeMemory);
 
-        // Start callback-chained burst loop
+        _endingSlice = false;
         driveLoop();
     }
 
-    // Iterative trampoline handles both async BLE callbacks AND sync simulator callbacks in O(1) stack
     private function driveLoop() as Void {
         while (!_exited) {
             var elapsed = System.getTimer() - _wakeStartMs;
-            if (elapsed >= SLICE_BUDGET_MS || _sentThisWake >= MAX_SLABS_PER_WAKE || _cursor >= _headSeq) {
+            if (_endingSlice || elapsed >= SLICE_BUDGET_MS || _sentThisWake >= MAX_SLABS_PER_WAKE || _cursor >= _headSeq) {
                 var more = (_cursor < _headSeq) ? 1 : 0;
                 finishWake(more, 0);
                 return;
@@ -178,7 +171,6 @@ class VoiceBgService extends System.ServiceDelegate {
                 return;
             }
 
-            // Read 8 KB slab from Storage (skip any missing/corrupt slot cleanly)
             var slab = null;
             while (_cursor < _headSeq) {
                 try {
@@ -209,6 +201,7 @@ class VoiceBgService extends System.ServiceDelegate {
                 }
             }
             VoiceProto.patchHeaderFlags(slab, patchFlags);
+            _endingSlice = isLastOfSlice;
 
             _gen++;
             var callGen = _gen;
@@ -224,10 +217,8 @@ class VoiceBgService extends System.ServiceDelegate {
             _inDispatch = false;
 
             if (!_syncCompleted) {
-                // Async callback pending — yield VM cleanly until VoiceBgTxListener fires
                 return;
             }
-            // Synchronous callback fired inline; continue iterative loop
         }
     }
 
@@ -261,7 +252,7 @@ class VoiceBgService extends System.ServiceDelegate {
         VoiceProto.writeIntArray(VoiceProto.K_BG_META, meta);
     }
 
-    private function finishWake(morePending as Number, errCode as Number) as Void {
+    private function finishWake(more as Number, errCode as Number) as Void {
         if (_exited) {
             return;
         }
@@ -269,10 +260,10 @@ class VoiceBgService extends System.ServiceDelegate {
         persistBgMeta(errCode);
         var payload = {
             "a" => _bgAckedSeq,
-            "s" => _lastSentSeq,
-            "m" => morePending,
-            "n" => _sentThisWake
-        } as Dictionary<String, Number>;
-        Background.exit(payload as Application.PersistableType);
+            "s" => _sentThisWake,
+            "m" => more,
+            "w" => _wakeCount
+        };
+        Background.exit(payload);
     }
 }

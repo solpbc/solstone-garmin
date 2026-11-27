@@ -6,7 +6,8 @@ import Toybox.Lang;
 import Toybox.System;
 import Toybox.WatchUi;
 
-// Battery-stingy AMOLED-friendly status view (pure black background, minimal primitives, <=1 Hz in high power only)
+// Minimal status view (replaced by the final watch face pass).
+// Renders every VoiceController state honestly with zero color-only meaning.
 class VoiceView extends WatchUi.View {
     private var _ctrl as VoiceController;
 
@@ -19,75 +20,93 @@ class VoiceView extends WatchUi.View {
         var w = dc.getWidth();
         var h = dc.getHeight();
         var cx = w / 2;
+        var snap = _ctrl.getSnapshot();
 
         dc.setColor(Graphics.COLOR_BLACK, Graphics.COLOR_BLACK);
         dc.clear();
 
-        if (_ctrl.isTimeoutLaunch()) {
+        if (snap.reason == VoiceProto.REASON_TIMEOUT_LAUNCH) {
             dc.setColor(Graphics.COLOR_ORANGE, Graphics.COLOR_TRANSPARENT);
-            dc.drawText(cx, (h * 38) / 100, Graphics.FONT_MEDIUM, "OPEN FROM", Graphics.TEXT_JUSTIFY_CENTER);
-            dc.drawText(cx, (h * 50) / 100, Graphics.FONT_MEDIUM, "APPS MENU", Graphics.TEXT_JUSTIFY_CENTER);
+            dc.drawText(cx, (h * 34) / 100, Graphics.FONT_MEDIUM, "OPEN FROM", Graphics.TEXT_JUSTIFY_CENTER);
+            dc.drawText(cx, (h * 46) / 100, Graphics.FONT_MEDIUM, "APPS MENU", Graphics.TEXT_JUSTIFY_CENTER);
             dc.setColor(Graphics.COLOR_LT_GRAY, Graphics.COLOR_TRANSPARENT);
-            dc.drawText(cx, (h * 66) / 100, Graphics.FONT_XTINY, "Glance launches time out", Graphics.TEXT_JUSTIFY_CENTER);
+            dc.drawText(cx, (h * 64) / 100, Graphics.FONT_XTINY, "Shortcuts stay active", Graphics.TEXT_JUSTIFY_CENTER);
             return;
         }
 
-        var connected = System.getDeviceSettings().phoneConnected;
+        var connected = snap.phoneLink;
         var stats = System.getSystemStats();
         var batPct = stats.battery.toNumber();
-        var freeKb = stats.freeMemory / 1024;
 
-        // Top: Mode + phone link indicator dot
-        dc.setColor(connected ? Graphics.COLOR_GREEN : Graphics.COLOR_DK_GRAY, Graphics.COLOR_TRANSPARENT);
-        dc.fillCircle(cx, (h * 12) / 100, 6);
+        // Top: phone link status text (not color-only)
+        dc.setColor(connected ? Graphics.COLOR_GREEN : Graphics.COLOR_LT_GRAY, Graphics.COLOR_TRANSPARENT);
+        var linkLabel = connected ? (snap.phoneLinked ? "PHONE READY" : "LINK PHONE") : "PHONE AWAY";
+        dc.drawText(cx, (h * 14) / 100, Graphics.FONT_XTINY, linkLabel, Graphics.TEXT_JUSTIFY_CENTER);
 
-        dc.setColor(Graphics.COLOR_LT_GRAY, Graphics.COLOR_TRANSPARENT);
-        dc.drawText(cx, (h * 17) / 100, Graphics.FONT_XTINY, VoiceProto.modeName(_ctrl.mode()), Graphics.TEXT_JUSTIFY_CENTER);
-
-        // Hero state & elapsed clock
+        // Hero state (active only when live audio is actually arriving)
         var statusTxt = "READY";
         var statusClr = Graphics.COLOR_WHITE;
-        var capState = _ctrl.captureState();
-        if (_ctrl.isStorageFull()) {
-            statusTxt = "STORAGE FULL";
+        if (snap.reason == VoiceProto.REASON_STORAGE_FULL) {
+            statusTxt = "WATCH FULL";
             statusClr = Graphics.COLOR_ORANGE;
-        } else if (_ctrl.isStalled()) {
-            statusTxt = "MIC STALLED";
+        } else if (snap.reason == VoiceProto.REASON_MIC_STALLED) {
+            statusTxt = "NEEDS ATTENTION";
             statusClr = Graphics.COLOR_RED;
-        } else if (capState == VoiceCaptureEngine.CAP_QUIET_WAIT) {
-            statusTxt = "SYNC BURST";
-            statusClr = Graphics.COLOR_BLUE;
-        } else if (_ctrl.isRecording()) {
-            statusTxt = "REC";
+        } else if (snap.reason == VoiceProto.REASON_MIC_PERMISSION) {
+            statusTxt = "MIC NEEDED";
+            statusClr = Graphics.COLOR_ORANGE;
+        } else if (snap.interrupted) {
+            statusTxt = "INTERRUPTED";
+            statusClr = Graphics.COLOR_ORANGE;
+        } else if (snap.phase == VoiceProto.PHASE_ACTIVE) {
+            statusTxt = "ACTIVE";
             statusClr = Graphics.COLOR_RED;
+        } else if (snap.phase == VoiceProto.PHASE_STARTING) {
+            statusTxt = "STARTING...";
+            statusClr = Graphics.COLOR_YELLOW;
+        } else if (snap.phase == VoiceProto.PHASE_STOPPING) {
+            statusTxt = "STOPPING...";
+            statusClr = Graphics.COLOR_YELLOW;
+        } else {
+            if (snap.lastEnd == VoiceProto.END_MIC_ERROR) {
+                statusTxt = "MIC ERROR";
+                statusClr = Graphics.COLOR_RED;
+            } else if (snap.lastEnd == VoiceProto.END_UNEXPECTED) {
+                statusTxt = "ENDED EARLY";
+                statusClr = Graphics.COLOR_ORANGE;
+            } else if (snap.lastEnd == VoiceProto.END_STORAGE_FULL) {
+                statusTxt = "WATCH FULL";
+                statusClr = Graphics.COLOR_ORANGE;
+            }
         }
 
         dc.setColor(statusClr, Graphics.COLOR_TRANSPARENT);
-        dc.drawText(cx, (h * 28) / 100, Graphics.FONT_MEDIUM, statusTxt, Graphics.TEXT_JUSTIFY_CENTER);
+        dc.drawText(cx, (h * 27) / 100, Graphics.FONT_MEDIUM, statusTxt, Graphics.TEXT_JUSTIFY_CENTER);
 
         dc.setColor(Graphics.COLOR_WHITE, Graphics.COLOR_TRANSPARENT);
         dc.drawText(cx, (h * 41) / 100, Graphics.FONT_NUMBER_MILD, formatElapsed(_ctrl.elapsedSec()), Graphics.TEXT_JUSTIFY_CENTER);
 
-        // Mid metrics: Segments, Queue pending, Acked
-        var ackDisplay = (_ctrl.ackedSeq() >= 0) ? _ctrl.ackedSeq() : 0;
-        var line1 = "S" + _ctrl.segId() + "  Q:" + _ctrl.pendingCount() + "  A:" + ackDisplay;
+        // Mid status: waiting queue + battery
+        var line1 = (snap.pendingSlabs > 0) ? ("WAITING: " + snap.heldSec + "s") : "ALL SENT";
+        if (snap.reason == VoiceProto.REASON_PHONE_TOO_OLD) {
+            line1 = "UPDATE PHONE APP";
+        } else if (snap.reason == VoiceProto.REASON_WATCH_TOO_OLD) {
+            line1 = "UPDATE WATCH APP";
+        }
         dc.setColor(Graphics.COLOR_LT_GRAY, Graphics.COLOR_TRANSPARENT);
         dc.drawText(cx, (h * 60) / 100, Graphics.FONT_XTINY, line1, Graphics.TEXT_JUSTIFY_CENTER);
+        dc.drawText(cx, (h * 69) / 100, Graphics.FONT_XTINY, "BAT " + batPct + "%", Graphics.TEXT_JUSTIFY_CENTER);
 
-        var line2 = "Bat:" + batPct + "%  Mem:" + freeKb + "K";
-        if (_ctrl.mode() == VoiceProto.MODE_BG_DRAIN) {
-            line2 = line2 + "  BG:" + _ctrl.bgWakeCount();
-        }
-        dc.drawText(cx, (h * 69) / 100, Graphics.FONT_XTINY, line2, Graphics.TEXT_JUSTIFY_CENTER);
-
-        // Bottom control hint / double-BACK confirmation guard
-        var hint = "UP/DN Mode | START";
+        // Bottom control hint
+        var hint = "START TO BEGIN";
         var hintClr = Graphics.COLOR_DK_GRAY;
         if (_ctrl.isBackConfirmArmed()) {
             hint = "PRESS BACK TO EXIT";
             hintClr = Graphics.COLOR_ORANGE;
-        } else if (_ctrl.isRecording()) {
-            hint = "START Stop | 2xBACK";
+        } else if (snap.phase == VoiceProto.PHASE_ACTIVE || snap.phase == VoiceProto.PHASE_STARTING) {
+            hint = "START STOP | 2xBACK";
+        } else if (connected && !snap.phoneLinked) {
+            hint = "MENU LINK | START";
         }
         dc.setColor(hintClr, Graphics.COLOR_TRANSPARENT);
         dc.drawText(cx, (h * 81) / 100, Graphics.FONT_XTINY, hint, Graphics.TEXT_JUSTIFY_CENTER);
@@ -108,7 +127,7 @@ class VoiceView extends WatchUi.View {
 class VoiceInputDelegate extends WatchUi.BehaviorDelegate {
     private var _ctrl as VoiceController;
 
-    public function initialize(ctrl as VoiceController) {
+    public function initialize(ctrl as VoiceController, view as VoiceView) {
         BehaviorDelegate.initialize();
         _ctrl = ctrl;
     }
@@ -118,18 +137,10 @@ class VoiceInputDelegate extends WatchUi.BehaviorDelegate {
         return true;
     }
 
-    public function onPreviousPage() as Boolean {
-        _ctrl.cycleMode(-1);
-        return true;
-    }
-
-    public function onNextPage() as Boolean {
-        _ctrl.cycleMode(1);
-        return true;
-    }
-
     public function onMenu() as Boolean {
-        _ctrl.cycleMode(1);
+        if (!_ctrl.isRecording()) {
+            _ctrl.requestLinkPhone();
+        }
         return true;
     }
 

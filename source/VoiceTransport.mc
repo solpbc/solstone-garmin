@@ -4,6 +4,7 @@
 import Toybox.Communications;
 import Toybox.Lang;
 import Toybox.System;
+import Toybox.Time;
 
 // Cycle-free per-call ConnectionListener holding ONLY a WeakReference + generation guard
 class VoiceTxListener extends Communications.ConnectionListener {
@@ -36,7 +37,6 @@ class VoiceTxListener extends Communications.ConnectionListener {
 }
 
 // Foreground strict half-duplex burst-then-ACK transport over Communications.transmit(ByteArray, {}, listener).
-// Never invoked in Mode B (BG_DRAIN). Zero crossing messages (CIQQA-4866 safe), true app-level ACKs (CIQQA-4631 safe).
 class VoiceTransport {
     public enum TxState {
         TX_IDLE,
@@ -61,14 +61,18 @@ class VoiceTransport {
     private var _totalTxErr as Number = 0;
     private var _totalAcks as Number = 0;
     private var _phoneMsgErrs as Number = 0;
-    private var _pendingTelem as ByteArray? = null;
-    private var _sendingTelem as Boolean = false;
+    private var _lastPhoneProtoVer as Number = -1;
+    private var _lastAckEpoch as Number = 0;
+    private var _lastTzLat100 as Number = VoiceProto.TZ_UNSET;
+    private var _lastTzLon100 as Number = VoiceProto.TZ_UNSET;
+    private var _pendingStatus as ByteArray? = null;
+    private var _sendingStatus as Boolean = false;
 
     public function initialize() {
     }
 
-    public function queueTelem(frame as ByteArray) as Void {
-        _pendingTelem = frame;
+    public function queueStatus(frame as ByteArray) as Void {
+        _pendingStatus = frame;
     }
 
     public function isIdle() as Boolean { return _state == TX_IDLE; }
@@ -76,6 +80,10 @@ class VoiceTransport {
     public function totalTxErr() as Number { return _totalTxErr; }
     public function totalAcks() as Number { return _totalAcks; }
     public function phoneMsgErrs() as Number { return _phoneMsgErrs; }
+    public function lastPhoneProtoVer() as Number { return _lastPhoneProtoVer; }
+    public function lastAckEpoch() as Number { return _lastAckEpoch; }
+    public function lastTzLat100() as Number { return _lastTzLat100; }
+    public function lastTzLon100() as Number { return _lastTzLon100; }
 
     public function resetCursor(ackedSeq as Number) as Void {
         _nextSeq = ackedSeq + 1;
@@ -88,12 +96,25 @@ class VoiceTransport {
         _phoneMsgErrs++;
     }
 
-    // Strict half-duplex inbound ACK handler (only expected in TX_WAIT_ACK). Returns true if ackedSeq advanced.
+    // Strict half-duplex inbound ACK/status handler. Returns true if ackedSeq, phone version, or tz point updated.
     public function onPhoneMessage(msg as Communications.PhoneAppMessage, ring as VoiceStorageRing) as Boolean {
+        var ver = VoiceProto.parseAckVersion(msg.data);
+        var metaChanged = false;
+        if (ver >= 0 && ver != _lastPhoneProtoVer) {
+            _lastPhoneProtoVer = ver;
+            metaChanged = true;
+        }
+        var tz = VoiceProto.parseAckTzPoint(msg.data);
+        if (tz != null && (tz[0] != _lastTzLat100 || tz[1] != _lastTzLon100)) {
+            _lastTzLat100 = tz[0];
+            _lastTzLon100 = tz[1];
+            metaChanged = true;
+        }
         var ackSeq = VoiceProto.parseAckSeq(msg.data);
         if (ackSeq >= 0) {
-            var advanced = ring.onAckConfirmed(ackSeq);
+            ring.onAckConfirmed(ackSeq);
             _totalAcks++;
+            _lastAckEpoch = Time.now().value();
             _backoffMs = 2000;
             _backoffUntilMs = 0;
             if (_state == TX_WAIT_ACK) {
@@ -101,19 +122,19 @@ class VoiceTransport {
                 _burstSent = 0;
                 _state = TX_IDLE;
             }
-            return advanced;
+            return true;
         }
-        return false;
+        return metaChanged;
     }
 
     public function onTxResult(gen as Number, ok as Boolean) as Void {
         if (gen != _gen || _state != TX_SENDING) {
             return;
         }
-        if (_sendingTelem) {
-            _sendingTelem = false;
+        if (_sendingStatus) {
+            _sendingStatus = false;
             if (ok) {
-                _pendingTelem = null;
+                _pendingStatus = null;
             }
             _state = TX_IDLE;
             return;
@@ -124,11 +145,9 @@ class VoiceTransport {
             var sentSeq = _nextSeq;
             _nextSeq++;
             if (sentSeq == _burstTargetSeq) {
-                // Burst complete — yield the wire and wait for phone's single cumulative ACK
                 _state = TX_WAIT_ACK;
                 _ackWaitStartMs = System.getTimer();
             } else {
-                // Return to TX_IDLE so the 250ms master Timer schedules the next slab (never chain inside callback!)
                 _state = TX_IDLE;
             }
         } else {
@@ -148,19 +167,18 @@ class VoiceTransport {
     }
 
     // Called from 250ms master Timer ONLY (never inside onData() or onComplete()).
-    // If requireFullBurst is true (Mode A during live capture), waits for >=K slabs (or quiet/sealed flush) to batch radio wakes.
     public function tick(ring as VoiceStorageRing, requireFullBurst as Boolean) as Void {
         var now = System.getTimer();
 
         if (_state == TX_SENDING) {
             if ((now - _txStartMs) >= TX_TIMEOUT_MS) {
-                if (_sendingTelem) {
-                    _sendingTelem = false;
+                if (_sendingStatus) {
+                    _sendingStatus = false;
                     _state = TX_IDLE;
                     _gen++;
                 } else {
                     _totalTxErr++;
-                    _gen++; // Ignore any late ghost listener
+                    _gen++;
                     enterBackoff();
                 }
             }
@@ -169,14 +187,12 @@ class VoiceTransport {
 
         if (_state == TX_WAIT_ACK) {
             if ((now - _ackWaitStartMs) >= ACK_TIMEOUT_MS) {
-                // Phone ACK lost or link dropped — rewind to last confirmed ACK + 1 and retry with backoff
                 _nextSeq = ring.ackedSeq() + 1;
                 enterBackoff();
             }
             return;
         }
 
-        // TX_IDLE
         if (_backoffUntilMs != 0 && (now - _backoffUntilMs) < 0) {
             return;
         }
@@ -186,19 +202,19 @@ class VoiceTransport {
             return;
         }
 
-        // Send piggybacked 24-byte SLVT telemetry frame cleanly between bursts (strictly 1-in-flight, no ACK needed)
-        var telem = _pendingTelem;
-        if (telem != null && _burstSent == 0) {
+        // Send 24-byte SLVS local link-status frame cleanly between bursts (strictly 1-in-flight)
+        var statusFrame = _pendingStatus;
+        if (statusFrame != null && _burstSent == 0) {
             _gen++;
-            var tGen = _gen;
-            _sendingTelem = true;
+            var sGen = _gen;
+            _sendingStatus = true;
             _state = TX_SENDING;
             _txStartMs = now;
             try {
-                Communications.transmit(telem, {}, new VoiceTxListener(self.weak(), tGen));
+                Communications.transmit(statusFrame, {}, new VoiceTxListener(self.weak(), sGen));
             } catch (_) {
-                if (_gen == tGen && _state == TX_SENDING) {
-                    _sendingTelem = false;
+                if (_gen == sGen && _state == TX_SENDING) {
+                    _sendingStatus = false;
                     _state = TX_IDLE;
                 }
             }
@@ -206,36 +222,45 @@ class VoiceTransport {
         }
 
         var head = ring.headSeq();
-        var minNext = ring.ackedSeq() + 1;
-        if (_nextSeq < minNext) {
-            _nextSeq = minNext;
+        var confirmed = ring.ackedSeq();
+        if (_nextSeq <= confirmed) {
+            _nextSeq = confirmed + 1;
         }
-        if (_nextSeq >= head) {
+        var remaining = head - _nextSeq;
+        if (remaining <= 0) {
             _burstSent = 0;
             return;
         }
 
-        var waiting = head - _nextSeq;
-        if (_burstSent == 0 && requireFullBurst && waiting < VoiceProto.BURST_SLABS) {
+        if (_burstSent == 0 && requireFullBurst && remaining < VoiceProto.BURST_SLABS) {
             return;
+        }
+
+        if (_burstSent == 0) {
+            var burstLen = (remaining < VoiceProto.BURST_SLABS) ? remaining : VoiceProto.BURST_SLABS;
+            _burstTargetSeq = _nextSeq + burstLen - 1;
         }
 
         var slab = ring.readSlab(_nextSeq);
-        if (slab == null) {
-            // Corrupt/missing slot: advance past so queue never wedges
+        while (slab == null && _nextSeq < head) {
             _nextSeq++;
+            slab = ring.readSlab(_nextSeq);
+        }
+        if (slab == null) {
+            _burstSent = 0;
             return;
         }
 
-        var isBurstEnd = (_burstSent + 1 >= VoiceProto.BURST_SLABS) || (_nextSeq + 1 >= head);
+        var isBurstEnd = (_nextSeq >= _burstTargetSeq) || ((_nextSeq + 1) >= head);
         if (isBurstEnd) {
-            VoiceProto.patchHeaderFlags(slab, VoiceProto.FLAG_ACK_REQ);
             _burstTargetSeq = _nextSeq;
-        } else {
-            _burstTargetSeq = -1;
+            var patchFlags = VoiceProto.FLAG_ACK_REQ;
+            if ((_nextSeq + 1) < head) {
+                patchFlags = patchFlags | VoiceProto.FLAG_MORE_PENDING;
+            }
+            VoiceProto.patchHeaderFlags(slab, patchFlags);
         }
 
-        // Synchronous-callback guard (gimporter pattern): set state BEFORE calling transmit()
         _gen++;
         var callGen = _gen;
         _state = TX_SENDING;

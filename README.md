@@ -66,14 +66,14 @@ source/
   VoiceApp.mc           minimal AppBase shell (keeps 64 KB background VM lean)
   VoiceBgService.mc     isolated 64 KB background ServiceDelegate burst drainer
   VoiceCaptureEngine.mc ISR-minimal audio callbacks and 5-minute segment loop
-  VoiceController.mc    foreground master timer, delivery modes, display gating
-  VoiceProtocol.mc      SLV2/SLVT binary framing, tag16, SPSC metadata keys
+  VoiceController.mc    foreground master timer, session lifecycle, display gating
+  VoiceProtocol.mc      SLV3/SLVS binary framing, tag16, SPSC metadata keys
   VoiceStorageRing.mc   single-writer integer-keyed ring with empty-window compaction
   VoiceTransport.mc     strict half-duplex burst-and-ACK Bluetooth transport
   VoiceView.mc          AMOLED/MIP/2-button status UI and double-BACK exit guard
   VoiceUnitTests.mc     Connect IQ Run No Evil unit test suite (--unit-test only)
 resources*/             app name ("solstone") and resolution-matched launcher SVGs
-docs/protocol.md        SLV2/SLVT binary wire format and half-duplex flow
+docs/protocol.md        SLV3/SLVS binary wire format and half-duplex flow
 scripts/                formatting/SPDX/permission checks and simulator test runner
 ```
 
@@ -96,7 +96,7 @@ ephemeral local RSA-4096 signing key under `bin/` automatically when `DEV_KEY`
 is not set. `make package` requires an explicit `DEV_KEY`.
 
 See [AGENTS.md](AGENTS.md) for architecture invariants and Connect IQ runtime
-constraints, and [docs/protocol.md](docs/protocol.md) for the `SLV2` wire
+constraints, and [docs/protocol.md](docs/protocol.md) for the `SLV3` wire
 specification.
 
 ## License
