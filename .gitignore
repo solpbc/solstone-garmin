@@ -1,0 +1,21 @@
+# Build outputs
+bin/
+build/
+*.prg
+*.prg.debug.xml
+*.iq
+*.mir
+
+# Signing keys and local environment
+*.der
+*.pem
+*.key
+.env
+.env.*
+
+# Editor and OS files
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*~
