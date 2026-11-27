@@ -15,6 +15,12 @@ run_ciq() {
   fi
 }
 
+expected_tests=$(grep -c '(:test)' source/VoiceUnitTests.mc)
+if [[ "$expected_tests" -lt 1 ]]; then
+  echo "error: no (:test) functions found in source/VoiceUnitTests.mc" >&2
+  exit 1
+fi
+
 mkdir -p bin/tests
 
 for dev in $TEST_DEVICES; do
@@ -48,7 +54,7 @@ for dev in $TEST_DEVICES; do
     exit 0
   " 2>&1) || true
   printf '%s\n' "$out" | grep -E 'Executing test|DEBUG|PASS|FAIL|ERROR|PASSED|Ran ' || true
-  if ! printf '%s\n' "$out" | grep -q "PASSED (passed=13, failed=0, errors=0)"; then
+  if ! printf '%s\n' "$out" | grep -q "PASSED (passed=${expected_tests}, failed=0, errors=0)"; then
     echo "error: simulator unit tests failed on ${dev}" >&2
     printf '%s\n' "$out" >&2
     exit 1

@@ -6,6 +6,7 @@ import Toybox.Audio.Capture;
 import Toybox.Lang;
 import Toybox.System;
 import Toybox.Test;
+import Toybox.Time;
 
 // Automated Connect IQ Run No Evil unit test suite (--unit-test only; stripped from release builds)
 
@@ -441,5 +442,35 @@ function testFaceKeyTzPointAndSnapshot(logger as Test.Logger) as Boolean {
 
     Storage.clearValues();
     logger.debug("K_FACE (-4), tz point ACK, and VoiceSnapshot seam verified");
+    return true;
+}
+
+(:test)
+function testComplicationAndStaleFgCrashDrain(logger as Test.Logger) as Boolean {
+    Storage.clearValues();
+    var now = Time.now().value();
+
+    // Alive foreground heartbeat (< 300s) -> fgAlive=true and ComplicationState=VALUE_ON
+    Test.assert(VoiceBgService.isFgHeartbeatAlive(1, now - 30, now));
+    Test.assert(!VoiceBgService.isFgHeartbeatAlive(0, now - 30, now));
+    Test.assert(!VoiceBgService.isFgHeartbeatAlive(1, now - 301, now));
+    Test.assert(!VoiceBgService.isFgHeartbeatAlive(1, 0, now));
+
+    VoiceProto.writeIntArray(VoiceProto.K_FACE, [VoiceProto.PHASE_ACTIVE, VoiceProto.REASON_NONE, VoiceProto.END_NONE, now - 60] as Array<Number>);
+    VoiceProto.writeIntArray(VoiceProto.K_FG_META, [10, 4, 1, VoiceProto.MODE_FG_BURST, 1, now - 60, now - 30] as Array<Number>);
+    Test.assertEqual(ComplicationState.fromStorage(300), ComplicationState.VALUE_ON);
+
+    // Stale foreground heartbeat after crash/reboot/kill -> fgAlive=false, complication flips to VALUE_UNKNOWN
+    VoiceProto.writeIntArray(VoiceProto.K_FG_META, [10, 4, 1, VoiceProto.MODE_FG_BURST, 1, now - 600, now - 400] as Array<Number>);
+    Test.assertEqual(ComplicationState.fromStorage(300), ComplicationState.VALUE_UNKNOWN);
+
+    // Ready + END_STORAGE_FULL -> VALUE_ATTENTION; Ready + END_NONE -> VALUE_OFF
+    VoiceProto.writeIntArray(VoiceProto.K_FACE, [VoiceProto.PHASE_READY, VoiceProto.REASON_STORAGE_FULL, VoiceProto.END_STORAGE_FULL, 0] as Array<Number>);
+    Test.assertEqual(ComplicationState.fromStorage(0), ComplicationState.VALUE_ATTENTION);
+    VoiceProto.writeIntArray(VoiceProto.K_FACE, [VoiceProto.PHASE_READY, VoiceProto.REASON_NONE, VoiceProto.END_NONE, 0] as Array<Number>);
+    Test.assertEqual(ComplicationState.fromStorage(0), ComplicationState.VALUE_OFF);
+
+    Storage.clearValues();
+    logger.debug("ComplicationState.fromStorage and stale-FG crash-drain heartbeat guard verified");
     return true;
 }

@@ -14,6 +14,9 @@ module VoiceProto {
     // Production foreground delivery mode (strict half-duplex burst + post-session BG drain)
     const MODE_FG_BURST as Number = 0;
 
+    // Heartbeat staleness threshold (seconds) after which BG treats an active FG flag as crashed/evicted
+    const FG_STALE_SEC as Number = 300;
+
     // Launch block reasons (Garmin closes non-apps-menu launches after ~2 minutes)
     const LAUNCH_OK as Number = 0;
     const LAUNCH_FROM_GLANCE as Number = 1;

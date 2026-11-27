@@ -324,6 +324,9 @@ class VoiceController {
         var started = _capture.startSession(nextSeg);
         if (started) {
             _ring.persistFgMeta(1, _capture.segId(), _capture.segEpoch());
+            // Keep 5-minute safety wake + doorbell armed during recording so a crash, reboot, or OS
+            // kill still triggers background drain and clears a stale complication once heartbeat ages out.
+            armBackgroundDrain();
         } else {
             _sessionStartEpoch = 0;
             setTouchEnabled(true);
@@ -555,8 +558,15 @@ class VoiceController {
         if (segSealed || (_uiTick % 40 == 0)) {
             _ring.maybeCompactIfEmpty(_capture.isRecording() ? 1 : 0, _capture.segId(), _capture.segEpoch());
             if (segSealed) {
+                if (_capture.isRecording()) {
+                    _ring.persistFgMeta(1, _capture.segId(), _capture.segEpoch());
+                }
                 persistHealthAndQueueStatus();
             }
+        }
+        // Keep K_FG_META[6] heartbeat fresh every 60s while recording (well under glance 120s & BG 300s staleness)
+        if (_capture.isRecording() && (_uiTick % 240 == 0)) {
+            _ring.persistFgMeta(1, _capture.segId(), _capture.segEpoch());
         }
 
         if (_highPower && (_uiTick % 4 == 0)) {

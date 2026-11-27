@@ -104,6 +104,7 @@ function buildInitialView(ctrl as VoiceController) as [WatchUi.Views] or [WatchU
 (:typecheck([disableBackgroundCheck, disableGlanceCheck]))
 function shutdownVoiceController(ctrl as VoiceController) as Void {
     ctrl.shutdown();
+    ComplicationState.publish(ComplicationState.fromStorage(0));
 }
 
 (:typecheck([disableBackgroundCheck, disableGlanceCheck]))

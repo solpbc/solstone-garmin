@@ -50,6 +50,14 @@ class VoiceBgService extends System.ServiceDelegate {
     private const SLICE_BUDGET_MS as Number = 22000; // Leave 8s margin under 30s OS hard kill
     private const MAX_SLABS_PER_WAKE as Number = 24;
 
+    public static function isFgHeartbeatAlive(fgActive as Number, fgHbEpoch as Number, nowEpoch as Number) as Boolean {
+        if (fgActive != 1 || fgHbEpoch <= 0) {
+            return false;
+        }
+        var age = nowEpoch - fgHbEpoch;
+        return (age >= -60) && (age < VoiceProto.FG_STALE_SEC);
+    }
+
     private var _wakeStartMs as Number = 0;
     private var _wakeEpoch as Number = 0;
     private var _headSeq as Number = 0;
@@ -93,13 +101,14 @@ class VoiceBgService extends System.ServiceDelegate {
         _ackTz = parsedTz;
 
         var fg = VoiceProto.readIntArray(VoiceProto.K_FG_META, 7);
+        ComplicationState.publish(ComplicationState.fromStorage(VoiceProto.FG_STALE_SEC));
         if (fg == null) {
             Background.exit(null);
             return;
         }
         _headSeq = fg[0];
         _fgAckedSeq = fg[1];
-        var fgActive = fg[2];
+        var fgAlive = VoiceBgService.isFgHeartbeatAlive(fg[2], fg[6], _wakeEpoch);
 
         var bg = VoiceProto.readIntArray(VoiceProto.K_BG_META, 5);
         if (bg != null) {
@@ -117,8 +126,10 @@ class VoiceBgService extends System.ServiceDelegate {
             ackChanged = true;
         }
 
-        // Foreground owns the radio while actively running; exit cleanly without touching BLE
-        if (fgActive == 1) {
+        // Foreground owns the radio while actively running with a fresh heartbeat; exit cleanly without touching BLE.
+        // If fgActive==1 has a stale heartbeat (>= FG_STALE_SEC), the foreground crashed/rebooted/was killed —
+        // drain surviving held slabs without modifying K_FG_META so next open still reports END_UNEXPECTED.
+        if (fgAlive) {
             if (ackChanged) {
                 persistBgMeta(0);
             }
