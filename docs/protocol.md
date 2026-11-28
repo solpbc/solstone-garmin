@@ -25,7 +25,7 @@ local link-status frames (`SLVS`).
   - Key `-3` (`K_HEALTH`):
     `[batStartPct, segsDone, stWriteMaxMs, writeCount, isStalled, modeId]`.
   - Key `-4` (`K_FACE`, foreground sole writer, updated on state transitions only):
-    `[phase, reason, lastEnd, startEpochOrZero]`, read-only by the glance VM.
+    `[phase, reason, lastEnd, startEpochOrZero]`.
   - Key `-5` (`K_SESSION_META`, foreground sole writer):
     `[lastEndReason, lastEndEpoch, phoneProtoVer, phoneEverAcked, lastPhoneAckEpoch, tzLat100, tzLon100]`.
   - Effective confirmed acknowledgement across both VMs is
@@ -102,7 +102,10 @@ simultaneously. Watch and phone therefore alternate strictly:
 
 Emitted in foreground on app open, 5-minute segment boundaries, and session
 stop inside the same half-duplex channel (strictly local watch-to-phone link
-status, zero internet calls):
+status, zero internet calls). When `pendingSlabs == 0` (idle channel), the
+phone companion replies with `{"a": -1, "v": 1, "z": [lat100, lon100]}` so
+opening the watch app links both sides and seeds the watch sun arc without a
+manual setup tap:
 
 | Offset | Size | Field |
 |---|---:|---|

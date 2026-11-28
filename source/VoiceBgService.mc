@@ -101,7 +101,6 @@ class VoiceBgService extends System.ServiceDelegate {
         _ackTz = parsedTz;
 
         var fg = VoiceProto.readIntArray(VoiceProto.K_FG_META, 7);
-        ComplicationState.publish(ComplicationState.fromStorage(VoiceProto.FG_STALE_SEC));
         if (fg == null) {
             Background.exit(null);
             return;

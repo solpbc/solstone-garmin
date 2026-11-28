@@ -96,21 +96,26 @@ class VoiceTransport {
         _phoneMsgErrs++;
     }
 
-    // Strict half-duplex inbound ACK/status handler. Returns true if ackedSeq, phone version, or tz point updated.
+    // Strict half-duplex inbound ACK/hello handler. Returns true if ackedSeq, phone hello, version, or tz updated.
     public function onPhoneMessage(msg as Communications.PhoneAppMessage, ring as VoiceStorageRing) as Boolean {
-        var ver = VoiceProto.parseAckVersion(msg.data);
+        return handlePhoneData(msg.data, ring);
+    }
+
+    public function handlePhoneData(data as Object?, ring as VoiceStorageRing) as Boolean {
+        var ver = VoiceProto.parseAckVersion(data);
         var metaChanged = false;
-        if (ver >= 0 && ver != _lastPhoneProtoVer) {
+        if (ver >= 0) {
             _lastPhoneProtoVer = ver;
+            _lastAckEpoch = Time.now().value();
             metaChanged = true;
         }
-        var tz = VoiceProto.parseAckTzPoint(msg.data);
+        var tz = VoiceProto.parseAckTzPoint(data);
         if (tz != null && (tz[0] != _lastTzLat100 || tz[1] != _lastTzLon100)) {
             _lastTzLat100 = tz[0];
             _lastTzLon100 = tz[1];
             metaChanged = true;
         }
-        var ackSeq = VoiceProto.parseAckSeq(msg.data);
+        var ackSeq = VoiceProto.parseAckSeq(data);
         if (ackSeq >= 0) {
             ring.onAckConfirmed(ackSeq);
             _totalAcks++;

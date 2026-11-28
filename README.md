@@ -9,19 +9,15 @@ out of reach, audio stays on your watch until it reconnects.
 
 Early public open-source release (Connect IQ API level 6.0.3+, SDK 9.3.0).
 The watch app builds cleanly with zero warnings across all 23 watches declared
-in `manifest.xml` and completed a continuous 2-hour off-charger run on a
-Forerunner 970 (`fw 19.23`, 16 kHz mono Ogg Opus with `FILTER_NREC`, 0 reboots,
-0 dropped slabs, `5.2%/h` battery) against a validation android receiver.
-
-Connect IQ Store listing, phone companion integration in the solstone app on
-your phone, and design passes are in progress.
+in `manifest.xml`. End-to-end hardware validation of the `SLV3` build with the
+phone companion and Connect IQ Store submission are in progress.
 
 ## How it works
 
 1. Open `solstone` from the watch's apps menu or a button shortcut and start a
-   voice session. (Garmin closes watch apps launched from glances or watch-face
-   complications after about two minutes, so sessions start only from the apps
-   menu or a button shortcut.)
+   voice session. (The app omits a glance and watch-face complication because
+   Garmin closes apps launched from those surfaces after about two minutes and
+   stops the microphone when returning to the watch face.)
 2. Audio is encoded on the watch as 16 kHz mono Ogg Opus with noise reduction
    (`FILTER_NREC`, when supported) in 5-minute segments, stored on the watch in
    `Application.Storage`, and moves over Bluetooth through Garmin Connect in
@@ -39,9 +35,8 @@ your phone, and design passes are in progress.
   a device you own.
 - The watch holds no journal credentials and makes no direct connection to any
   sol pbc server or to the internet.
-- The app declares only the four Connect IQ permissions it uses:
-  `AudioInput`, `Background`, `Communications`, and `ComplicationPublisher`
-  (so a watch face can show its state). It declares no location,
+- The app declares only the three Connect IQ permissions it uses:
+  `AudioInput`, `Background`, and `Communications`. It declares no location,
   sensor, or fitness-activity permissions, creates no Garmin FIT activities,
   and includes no analytics, tracking, or crash-reporting SDKs.
 
@@ -61,17 +56,19 @@ The 23 Connect IQ 6.0.3+ watches with a built-in microphone declared in
 ## Layout
 
 ```text
-manifest.xml            app identity, 23 microphone watches, 4 permissions
+manifest.xml            app identity, 23 microphone watches, 3 permissions
 monkey.jungle           Connect IQ build configuration
 source/
+  SunArc.mc             sun-arc and night-constellation sky renderer
   VoiceApp.mc           minimal AppBase shell (keeps 64 KB background VM lean)
   VoiceBgService.mc     isolated 64 KB background ServiceDelegate burst drainer
   VoiceCaptureEngine.mc ISR-minimal audio callbacks and 5-minute segment loop
   VoiceController.mc    foreground master timer, session lifecycle, display gating
+  VoiceFace.mc          first-screen and details face layout
   VoiceProtocol.mc      SLV3/SLVS binary framing, tag16, SPSC metadata keys
   VoiceStorageRing.mc   single-writer integer-keyed ring with empty-window compaction
   VoiceTransport.mc     strict half-duplex burst-and-ACK Bluetooth transport
-  VoiceView.mc          AMOLED/MIP/2-button status UI and double-BACK exit guard
+  VoiceView.mc          snapshot-to-face adapter, 3s double-SELECT stop guard, BACK-to-details
   VoiceUnitTests.mc     Connect IQ Run No Evil unit test suite (--unit-test only)
 resources*/             app name ("solstone") and resolution-matched launcher SVGs
 docs/protocol.md        SLV3/SLVS binary wire format and half-duplex flow

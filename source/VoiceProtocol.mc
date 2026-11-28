@@ -6,7 +6,7 @@ import Toybox.Application.Storage;
 import Toybox.Lang;
 import Toybox.System;
 
-(:background :glance)
+(:background)
 module VoiceProto {
     // Wire protocol version exchanged in SLV3/SLVS headers and phone ACKs {"a": seq, "v": 1}
     const PROTO_VERSION as Number = 1;

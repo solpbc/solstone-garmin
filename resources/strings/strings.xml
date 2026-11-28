@@ -1,5 +1,5 @@
 <strings>
-    <string id="AppName" scope="glance">solstone</string>
+    <string id="AppName">solstone</string>
 
     <string id="Start">start</string>
     <string id="Stop">stop</string>
@@ -10,13 +10,13 @@
     <string id="Running">running</string>
 
     <string id="PillTimeout">open from apps and activities</string>
-    <string id="PillMicPermission" scope="glance">microphone access needed</string>
+    <string id="PillMicPermission">microphone access needed</string>
     <string id="PillMicStalled">audio needs attention</string>
-    <string id="PillStorageFull" scope="glance">watch storage is full</string>
-    <string id="PillEnded" scope="glance">session ended unexpectedly</string>
+    <string id="PillStorageFull">watch storage is full</string>
+    <string id="PillEnded">session ended unexpectedly</string>
     <string id="PillPhoneTooOld">update solstone on your phone</string>
     <string id="PillWatchTooOld">update solstone on your watch</string>
-    <string id="PillMicStopped" scope="glance">microphone stopped</string>
+    <string id="PillMicStopped">microphone stopped</string>
     <string id="PillNoPhone">set up solstone on your phone</string>
 
     <string id="TimeoutPanel">opened from a glance or a watch face, solstone closes after about 2 minutes.</string>
@@ -47,16 +47,4 @@
     <string id="SecondsShort">$1$s</string>
     <string id="MinutesShort">$1$m</string>
     <string id="HoursMinutesShort">$1$h $2$m</string>
-
-    <string id="GlanceRunning" scope="glance">running</string>
-    <string id="GlanceReady" scope="glance">ready</string>
-    <string id="GlanceHeld" scope="glance">$1$ min on your watch</string>
-    <string id="GlanceUnknown" scope="glance">open solstone</string>
-
-    <string id="ComplicationLong">solstone</string>
-    <string id="ComplicationShort">solstone</string>
-    <string id="ComplicationOn" scope="background">on</string>
-    <string id="ComplicationOff" scope="background">off</string>
-    <string id="ComplicationAttention" scope="background">!</string>
-    <string id="ComplicationUnknown" scope="background">?</string>
 </strings>

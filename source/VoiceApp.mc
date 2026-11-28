@@ -7,8 +7,9 @@ import Toybox.System;
 import Toybox.WatchUi;
 
 // Featherweight AppBase lifecycle shell:
-// Keeps initialize()/onStart() near-zero bytes so the 64 KB Background and Glance VMs stay lean.
-(:background :glance)
+// Keeps initialize()/onStart() near-zero bytes so the 64 KB Background VM stays lean.
+// Deliberately omits getGlanceView() so Garmin does not expose a timed-out glance launch.
+(:background)
 class VoiceApp extends Application.AppBase {
     private var _ctrl as VoiceController?;
     private var _launchBlockReason as Number = VoiceProto.LAUNCH_OK;
@@ -36,12 +37,6 @@ class VoiceApp extends Application.AppBase {
         return $.buildInitialView(ctrl);
     }
 
-    (:glance :typecheck(disableBackgroundCheck))
-    public function getGlanceView() as [WatchUi.GlanceView] or [WatchUi.GlanceView, WatchUi.GlanceViewDelegate] or Null {
-        return [new $.VoiceGlanceView()];
-    }
-
-    (:typecheck(disableGlanceCheck))
     public function getServiceDelegate() as [System.ServiceDelegate] {
         return [new $.VoiceBgService()];
     }
@@ -90,44 +85,43 @@ class VoiceApp extends Application.AppBase {
     }
 }
 
-// Foreground-only bridge functions (excluded from 64 KB background and glance VMs)
-(:typecheck([disableBackgroundCheck, disableGlanceCheck]))
+// Foreground-only bridge functions (excluded from 64 KB background VM)
+(:typecheck(disableBackgroundCheck))
 function createVoiceController(launchBlockReason as Number) as VoiceController {
     return new $.VoiceController(launchBlockReason);
 }
 
-(:typecheck([disableBackgroundCheck, disableGlanceCheck]))
+(:typecheck(disableBackgroundCheck))
 function buildInitialView(ctrl as VoiceController) as [WatchUi.Views] or [WatchUi.Views, WatchUi.InputDelegates] {
     return ctrl.createInitialView();
 }
 
-(:typecheck([disableBackgroundCheck, disableGlanceCheck]))
+(:typecheck(disableBackgroundCheck))
 function shutdownVoiceController(ctrl as VoiceController) as Void {
     ctrl.shutdown();
-    ComplicationState.publish(ComplicationState.fromStorage(0));
 }
 
-(:typecheck([disableBackgroundCheck, disableGlanceCheck]))
+(:typecheck(disableBackgroundCheck))
 function dispatchBgData(ctrl as VoiceController, data as Application.PersistableType) as Void {
     ctrl.onBackgroundData(data);
 }
 
-(:typecheck([disableBackgroundCheck, disableGlanceCheck]))
+(:typecheck(disableBackgroundCheck))
 function dispatchStorageChanged(ctrl as VoiceController) as Void {
     ctrl.onStorageChanged();
 }
 
-(:typecheck([disableBackgroundCheck, disableGlanceCheck]))
+(:typecheck(disableBackgroundCheck))
 function dispatchDisplayModeChanged(ctrl as VoiceController) as Void {
     ctrl.onDisplayModeChanged();
 }
 
-(:typecheck([disableBackgroundCheck, disableGlanceCheck]))
+(:typecheck(disableBackgroundCheck))
 function dispatchAppActive(ctrl as VoiceController) as Void {
     ctrl.onAppActive();
 }
 
-(:typecheck([disableBackgroundCheck, disableGlanceCheck]))
+(:typecheck(disableBackgroundCheck))
 function dispatchAppInactive(ctrl as VoiceController) as Void {
     ctrl.onAppInactive();
 }

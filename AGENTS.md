@@ -24,15 +24,18 @@ machine names, and signing keys. Reference only public files in this repository
   inside the 64 KB background VM and foreground VM budgets; check
   `--build-stats 0` from `make build`. Do not add speculative layers, unused
   permissions, or helper abstractions without a concrete requirement.
-- **Tie UI state to live audio input.** Surface `MIC STALLED` when the stall
-  watchdog expires without non-empty chunks (do not hide stalls behind an
-  active state). Empty 0-byte audio chunks must never reset the stall watchdog.
-  Never overwrite or clear unconfirmed audio when storage fills.
-- **Enforce the strict 4-permission allowlist.** Declare only `AudioInput`,
-  `Background`, `Communications`, and `ComplicationPublisher` in `manifest.xml` (`scripts/check-format.sh`
+- **Tie UI state to live audio input.** Surface `REASON_MIC_STALLED`
+  (`Rez.Strings.PillMicStalled`) when the stall watchdog expires without
+  non-empty chunks (do not hide stalls behind an active state). Empty 0-byte
+  audio chunks must never reset the stall watchdog. Never overwrite or clear
+  unconfirmed audio when storage fills.
+- **Enforce the strict 3-permission allowlist.** Declare only `AudioInput`,
+  `Background`, and `Communications` in `manifest.xml` (`scripts/check-format.sh`
   enforces this allowlist in `make format-check`). Never add `Sensor`,
-  `Positioning`, `Fit`, `SensorHistory`, analytics, crash reporting, or direct
-  internet calls. Never use `ActivityRecording` as a keep-alive hack.
+  `Positioning`, `Fit`, `SensorHistory`, `ComplicationPublisher`, analytics,
+  crash reporting, or direct internet calls. Never use `ActivityRecording` as a
+  keep-alive hack, and omit `getGlanceView()` so Garmin does not expose a
+  timed-out glance launch.
 - **Verify against real tool output.** Run `make ci` before committing and
   check compiler output and simulator test results directly.
 - **Operator-driven releases.** Store `.iq` packaging and Connect IQ Store
@@ -77,8 +80,13 @@ device-specific launch crashes:
 4. **No concurrent `Storage` key races and no per-slab `deleteValue()`:**
    - Foreground is sole writer of slots `0..959` and `K_FG_META (-1)`;
      background is sole writer of `K_BG_META (-2)`.
-   - While the foreground app runs, call `Background.deleteTemporalEvent()`
-     and re-arm on `onStop()` only when unconfirmed slabs remain.
+   - Disarm temporal wakes on idle launch and on clean `onStop()` when
+     `pendingCount() == 0`; keep the 5-minute temporal wake armed during active
+     recording so `VoiceBgService` drains after an unclean exit once the
+     foreground heartbeat goes stale (`FG_STALE_SEC = 300 s`), while exiting
+     cleanly without touching BLE or foreground-owned `Storage` (persisting
+     `K_BG_META` only if a new doorbell ACK arrived) whenever
+     `isFgHeartbeatAlive()` is true.
    - Never call per-slab `Storage.deleteValue()` during continuous turnover
      (tombstones cause multi-second flash compaction freezes). Compact via
      `Storage.clearValues()` only when `pendingCount() == 0` (periodically
@@ -109,9 +117,9 @@ device-specific launch crashes:
 | `make build` | Strict release build (`-r -O 3pz -l 3 -w`) for `DEVICE` (default `fr970`) |
 | `make build-debug` | Debug build (`-O 2 -l 3 -w`) keeping `(:debug)` logs |
 | `make build-all` | Zero-warning release compile across all 23 watches in `manifest.xml` |
-| `make test` | Run 13-test Run No Evil simulator suite across `fr970`, `fenix8solar47mm`, `venu441mm`, `venux1` |
+| `make test` | Run Run No Evil simulator suite across `fr970`, `fenix8solar47mm`, `venu441mm`, `venux1` |
 | `make format` | Auto-fix trailing whitespace / line endings and check SPDX headers |
-| `make format-check` | Verify SPDX headers, whitespace, and strict 4-permission manifest allowlist |
+| `make format-check` | Verify SPDX headers, whitespace, and strict 3-permission manifest allowlist |
 | `make ci` | Full pre-commit gate: `format-check` + `build-all` + `test` |
 | `make package DEV_KEY=...` | Export signed `.iq` Connect IQ Store bundle (requires explicit `DEV_KEY`) |
 | `make clean` | Remove `bin/` and generated build outputs |

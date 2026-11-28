@@ -131,11 +131,6 @@ class VoiceView extends WatchUi.View {
             _confirmAtMs = 0;
         }
         var f = FaceSource.facts(snap, armed);
-        // The complication follows what the face shows.
-        var attention = f.reason == Face.REASON_MIC_STALLED || f.control() == Face.CONTROL_DETAILS;
-        ComplicationState.publish(f.engaged()
-            ? (attention ? ComplicationState.VALUE_ATTENTION : ComplicationState.VALUE_ON)
-            : (attention ? ComplicationState.VALUE_ATTENTION : ComplicationState.VALUE_OFF));
         if (_details) {
             FaceDraw.details(dc, f);
         } else {
